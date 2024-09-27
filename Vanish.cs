@@ -10,11 +10,10 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.2")]
-    [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
+    [Info("Vanish", "Whispers88", "1.3.3")]
+    [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
-
         #region Configuration
         private readonly List<BasePlayer> _hiddenPlayers = new List<BasePlayer>();
         private readonly List<BasePlayer> _hiddenOffline = new List<BasePlayer>();
@@ -204,11 +203,11 @@ namespace Oxide.Plugins
             var col = player.gameObject.GetComponent<Collider>();
             if (!col.enabled)
             {
-                player.UpdatePlayerCollider(true);
+                player.EnablePlayerCollider();
                 Message(player.IPlayer, "ColliderEnbabled");
                 return;
             }
-            player.UpdatePlayerCollider(false);
+            player.DisablePlayerCollider();
             Message(player.IPlayer, "ColliderDisabled");
         }
 
@@ -217,7 +216,7 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
             if (config.AntiFlyHack) player.ResetAntiHack();
             player._limitedNetworking = false;
-            player.UpdatePlayerCollider(true);
+            player.EnablePlayerCollider();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
@@ -256,7 +255,7 @@ namespace Oxide.Plugins
             AntiHack.ShouldIgnore(player);
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
             player._limitedNetworking = true;
-            player.UpdatePlayerCollider(false);
+            player.DisablePlayerCollider();
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
             _hiddenPlayers.Add(player);
@@ -342,7 +341,7 @@ namespace Oxide.Plugins
             }
 
             player._limitedNetworking = false;
-            player.UpdatePlayerCollider(true);
+            player.EnablePlayerCollider();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             _hiddenPlayers.Remove(player);
