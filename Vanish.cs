@@ -4,24 +4,30 @@ using Oxide.Core;
 using Oxide.Core.Configuration;
 using Oxide.Core.Libraries.Covalence;
 using Oxide.Game.Rust.Cui;
+using ProtoBuf;
 using Rust;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Facepunch;
+using Rust.AI;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.0")]
+    [Info("Vanish", "Whispers88", "1.8.4")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
-        #region Configuration
-        private readonly List<BasePlayer> _hiddenPlayers = new List<BasePlayer>();
+        private static Vanish vanish;
+        private readonly List<ulong> _hiddenPlayers = new List<ulong>();
         private List<ulong> _hiddenOffline = new List<ulong>();
-        private static readonly List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage" };
-        private static readonly DamageTypeList _EmptyDmgList = new DamageTypeList();
+        private static List<string> _registeredhooks;
+        private static int PlayerLayermask;
+        private static DamageTypeList _EmptyDmgList;
         CuiElementContainer cachedVanishUI = null;
 
+        #region Configuration
 
         private Configuration config;
 
@@ -29,6 +35,9 @@ namespace Oxide.Plugins
         {
             [JsonProperty("NoClip on Vanish (runs noclip command)")]
             public bool NoClipOnVanish = true;
+
+            [JsonProperty("Inventory view cmd", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public string[] InvViewCMD = new[] { "inv", "invspy" };
 
             [JsonProperty("Use OnEntityTakeDamage hook (Set to true to enable use of vanish.damage perm. Set to false for better performance)")]
             public bool UseOnEntityTakeDamage = false;
@@ -38,6 +47,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Keep a vanished player hidden on disconnect")]
             public bool HideOnDisconnect = true;
+
+            [JsonProperty("Bypass violation checks for vanished players")]
+            public bool BypassViolation = true;
 
             [JsonProperty("Turn off fly hack detection for players in vanish")]
             public bool AntiHack = true;
@@ -67,7 +79,7 @@ namespace Oxide.Plugins
             public bool EnableGUI = true;
 
             [JsonProperty("Icon URL (.png or .jpg)")]
-            public string ImageUrlIcon = "https://i.imgur.com/yL9HNRy.png";
+            public string ImageUrlIcon = "https://i.ibb.co/3rZzftx/yL9HNRy.png";
 
             [JsonProperty("Image Color")]
             public string ImageColor = "1 1 1 0.3";
@@ -132,8 +144,39 @@ namespace Oxide.Plugins
         {
             _hiddenOfflineData = Interface.Oxide.DataFileSystem.GetFile("VanishPlayers");
             LoadData();
+            InitVanishedPlayers();
         }
 
+        private void InitVanishedPlayers()
+        {
+            foreach (var playerid in _hiddenOffline)
+            {
+                BasePlayer player = BasePlayer.FindByID(playerid);
+                if (player == null) continue;
+
+                if (IsInvisible(player))
+                    continue;
+
+                if (!player.IsConnected)
+                {
+                    List<Connection> connections = Pool.Get<List<Connection>>();
+                    foreach (var con in Net.sv.connections)
+                    {
+                        if (con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player)
+                            connections.Add(con);
+                    }
+                    player.OnNetworkSubscribersLeave(connections);
+                    player.DisablePlayerCollider();
+                    player.syncPosition = false;
+                    player.limitNetworking = true;
+                    Pool.FreeUnmanaged(ref connections);
+                }
+                else
+                {
+                    Disappear(player);
+                }
+            }
+        }
         #endregion Configuration
 
         #region Localization
@@ -147,6 +190,7 @@ namespace Oxide.Plugins
                 ["Reappear"] = "Vanish: <color=orange> Disabled </color>",
                 ["NoPerms"] = "You do not have permission to do this",
                 ["PermanentVanish"] = "You are in a permanent vanish mode",
+                ["NoPlayers"] = "No players found using id: {0}"
 
             }, this);
         }
@@ -159,19 +203,28 @@ namespace Oxide.Plugins
         private const string PermUnlock = "vanish.unlock";
         private const string PermDamage = "vanish.damage";
         private const string PermVanish = "vanish.permanent";
+        private const string PermInvView = "vanish.invviewer";
+
 
         private void Init()
         {
+            vanish = this;
             cachedVanishUI = CreateVanishUI();
+            PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
+            _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage", "OnPlayerViolation" };
+            _EmptyDmgList = new DamageTypeList();
 
             // Register universal chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
+            AddCovalenceCommand(config.InvViewCMD, "InventoryViewerCMD");
 
             // Register permissions for commands
             permission.RegisterPermission(PermAllow, this);
             permission.RegisterPermission(PermUnlock, this);
             permission.RegisterPermission(PermDamage, this);
             permission.RegisterPermission(PermVanish, this);
+            permission.RegisterPermission(PermInvView, this);
+
 
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
@@ -179,6 +232,11 @@ namespace Oxide.Plugins
             if (!config.UseOnEntityTakeDamage)
             {
                 _registeredhooks.Remove("OnEntityTakeDamage");
+            }
+
+            if (!config.BypassViolation)
+            {
+                _registeredhooks.Remove("OnPlayerViolation");
             }
 
             if (!config.UseCanUseLockedEntity)
@@ -196,19 +254,16 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            foreach (var p in _hiddenPlayers)
-            {
-                if (!_hiddenOffline.Contains(p.userID))
-                    _hiddenOffline.Add(p.userID);
-            }
-
-            SaveData();
-
             for (int i = _hiddenPlayers.Count - 1; i > -1; i--)
             {
-                if (_hiddenPlayers[i] == null) continue;
-                Reappear(_hiddenPlayers[i]);
+                BasePlayer? hiddenPlayer = GetPlayer(_hiddenPlayers[i]);
+                if (hiddenPlayer == null) continue;
+
+                if (!_hiddenOffline.Contains(hiddenPlayer.userID))
+                    _hiddenOffline.Add(hiddenPlayer.userID);
+                Reappear(hiddenPlayer);
             }
+            SaveData();
         }
 
         private DynamicConfigFile _hiddenOfflineData;
@@ -223,32 +278,7 @@ namespace Oxide.Plugins
             {
                 _hiddenOffline = new List<ulong>();
             }
-
-            foreach (var playerid in _hiddenOffline)
-            {
-                BasePlayer player = BasePlayer.FindByID(playerid);
-                if (player == null) continue;
-                if (IsInvisible(player))
-                    continue;
-
-                if (!player.IsConnected)
-                {
-                    List<Connection> connections = new List<Connection>();
-                    foreach (var con in Net.sv.connections)
-                    {
-                        if (con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player)
-                            connections.Add(con);
-                    }
-                    player.OnNetworkSubscribersLeave(connections);
-                    player.DisablePlayerCollider();
-                    player.syncPosition = false;
-                    player.limitNetworking = true;
-                }
-                else
-                {
-                    Disappear(player);
-                }
-            }
+            Puts("Load Data");
         }
 
         private void SaveData()
@@ -259,6 +289,69 @@ namespace Oxide.Plugins
         #endregion Initialization
 
         #region Commands
+        private void InventoryViewerCMD(IPlayer iplayer, string command, string[] args)
+        {
+            BasePlayer player = (BasePlayer)iplayer.Object;
+            if (player == null) return;
+            if(!HasPerm(player.UserIDString, PermInvView))
+            {
+                if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
+            }
+            if (args.Length < 1)
+            {
+                RaycastHit raycastHit;
+                if (!Physics.Raycast(player.eyes.HeadRay(), out raycastHit, 5f, PlayerLayermask))
+                    return;
+
+                BasePlayer? entity = raycastHit.GetEntity() as BasePlayer;
+
+                if (entity == null)
+                {
+                    Message(player.IPlayer, "NoPlayers", "NoArgs");
+                    return;
+                }
+
+                timer.Once(0.3f, () => { StartLootingPlayer(player, entity); });
+            }
+            BasePlayer? foundplayer = null;
+            if (ulong.TryParse(args[0], out ulong steamID))
+            {
+                foundplayer = BasePlayer.FindAwakeOrSleepingByID(steamID);
+            }
+            else
+            {
+                foreach (var p in BasePlayer.allPlayerList)
+                {
+                    if (!p.displayName.StartsWith(args[0], StringComparison.CurrentCultureIgnoreCase))
+                        continue;
+
+                    foundplayer = p;
+                    break;
+                }
+            }
+            if (foundplayer == null)
+            {
+                Message(player.IPlayer, "NoPlayers", args[0]);
+                return;
+            }
+
+            timer.Once(0.3f, () => { StartLootingPlayer(player, foundplayer); });
+        }
+
+        private void StartLootingPlayer(BasePlayer player, BasePlayer foundplayer)
+        {
+            if (player == null || foundplayer == null)
+                return;
+            player.inventory.loot.AddContainer(foundplayer.inventory.containerMain);
+            player.inventory.loot.AddContainer(foundplayer.inventory.containerWear);
+            player.inventory.loot.AddContainer(foundplayer.inventory.containerBelt);
+            player.inventory.loot.entitySource = RelationshipManager.ServerInstance;
+            player.inventory.loot.PositionChecks = false;
+            player.inventory.loot.MarkDirty();
+            player.inventory.loot.SendImmediate();
+            player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
+        }
+
         private void VanishCommand(IPlayer iplayer, string command, string[] args)
         {
             BasePlayer player = (BasePlayer)iplayer.Object;
@@ -277,17 +370,21 @@ namespace Oxide.Plugins
             else Disappear(player);
         }
 
+        private string drowneffect = "28ad47c8e6d313742a7a2740674a25b5";
+        private string falldamageeffect = "ca14ed027d5924003b1c5d9e523a5fce";
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
+
             if (config.AntiHack) player.ResetAntiHack();
 
             player.syncPosition = true;
-            VanishPositionUpdate vanishPositionUpdate;
 
+            VanishPositionUpdate vanishPositionUpdate;
             if (player.TryGetComponent<VanishPositionUpdate>(out vanishPositionUpdate))
                 UnityEngine.Object.Destroy(vanishPositionUpdate);
 
+            SimpleAIMemory.RemoveIgnorePlayer(player);
 
             //metabolism
             if (config.Metabolism)
@@ -299,32 +396,30 @@ namespace Oxide.Plugins
                 player.metabolism.calories.min = 0;
                 player.metabolism.wetness.max = 1;
             }
+
             if (config.MetabolismReset)
             {
-                MetabolismValues value;
-
-                if (_storedMetabolism.TryGetValue(player, out value))
+                if (_storedMetabolism.TryGetValue(player.userID, out MetabolismValues value))
                 {
-                    player.health = value.health;
-                    player.metabolism.hydration.value = value.hydration;
+                    player.SetHealth(value.health);
+                    player.metabolism.hydration.SetValue(value.hydration);
+                    player.metabolism.calories.SetValue(value.calories);
                 }
-                _storedMetabolism.Remove(player);
+                _storedMetabolism.Remove(player.userID);
             }
-
-            player.metabolism.isDirty = true;
-            player.metabolism.SendChangesToClient();
 
             player._limitedNetworking = false;
 
-            _hiddenPlayers.Remove(player);
+            _hiddenPlayers.Remove(player.userID);
+
             player.EnablePlayerCollider();
             player.UpdateNetworkGroup();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
 
             //Un-Mute Player Effects
-            player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
-            player.fallDamageEffect.guid = "ca14ed027d5924003b1c5d9e523a5fce";
+            player.drownEffect.guid = drowneffect;
+            player.fallDamageEffect.guid = falldamageeffect;
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
@@ -339,29 +434,38 @@ namespace Oxide.Plugins
                     SendEffect(player, config.ReappearSoundEffect);
                 }
             }
+
             CuiHelper.DestroyUi(player, "VanishUI");
 
-            if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand("noclip");
+            if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand(noclip);
 
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
-        private class MetabolismValues
+        private struct MetabolismValues
         {
             public float health;
             public float hydration;
+            public float calories;
         }
 
-        private Dictionary<BasePlayer, MetabolismValues> _storedMetabolism = new Dictionary<BasePlayer, MetabolismValues>();
+        private GameObjectRef _emptygameObject = new GameObjectRef();
+        private Dictionary<ulong, MetabolismValues> _storedMetabolism = new Dictionary<ulong, MetabolismValues>();
+        private string noclip = "noclip";
+
         private void Disappear(BasePlayer player)
         {
-            if (!_hiddenPlayers.Contains(player))
-                _hiddenPlayers.Add(player);
+            if (!_hiddenPlayers.Contains(player.userID))
+                _hiddenPlayers.Add(player.userID);
 
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
 
             if (config.AntiHack)
+            {
                 player.PauseFlyHackDetection(float.MaxValue);
+            }
+
+            SimpleAIMemory.AddIgnorePlayer(player);
 
             VanishPositionUpdate vanishPositionUpdate;
             if (player.TryGetComponent<VanishPositionUpdate>(out vanishPositionUpdate))
@@ -382,23 +486,25 @@ namespace Oxide.Plugins
                 player.metabolism.SendChangesToClient();
             }
             if (config.MetabolismReset && !player._limitedNetworking)
-                _storedMetabolism[player] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value };
+                _storedMetabolism[player.userID] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
 
-            List<Connection> connections = new List<Connection>();
+            List<Connection> connections = Pool.Get<List<Connection>>();
             foreach (var con in Net.sv.connections)
             {
                 if (con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player)
                     connections.Add(con);
             }
             player.OnNetworkSubscribersLeave(connections);
+            Pool.FreeUnmanaged(ref connections);
+
             player.DisablePlayerCollider();
             player.syncPosition = false;
 
             player._limitedNetworking = true;
 
             //Mute Player Effects
-            player.fallDamageEffect = new GameObjectRef();
-            player.drownEffect = new GameObjectRef();
+            player.fallDamageEffect = _emptygameObject;
+            player.drownEffect = _emptygameObject;
 
             if (_hiddenPlayers.Count == 1) SubscribeToHooks();
 
@@ -414,7 +520,7 @@ namespace Oxide.Plugins
                 }
             }
 
-            if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted) player.SendConsoleCommand("noclip");
+            if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted) player.SendConsoleCommand(noclip);
 
             if (config.EnableGUI)
             {
@@ -429,16 +535,28 @@ namespace Oxide.Plugins
         #region Hooks
         private void OnPlayerConnected(BasePlayer player)
         {
+            if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
+            {
+                timer.Once(3f, () => OnPlayerConnected(player));
+                return;
+            }
+
             if (_hiddenOffline.Contains(player.userID))
             {
                 _hiddenOffline.Remove(player.userID);
                 if (HasPerm(player.UserIDString, PermAllow))
+                {
                     Disappear(player);
+                    if (config.NoClipOnVanish)
+                        player.SendConsoleCommand(noclip);
+                }
                 return;
             }
             if (HasPerm(player.UserIDString, PermVanish))
             {
                 Disappear(player);
+                if (config.NoClipOnVanish)
+                    player.SendConsoleCommand(noclip);
             }
         }
 
@@ -450,10 +568,13 @@ namespace Oxide.Plugins
             return null;
         }
 
-        private object OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
+        private object? OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
         {
-            BasePlayer attacker = info?.InitiatorPlayer;
-            BasePlayer victim = entity?.ToPlayer();
+            if (info == null || entity == null)
+                return null;
+
+            BasePlayer attacker = info.InitiatorPlayer;
+            BasePlayer victim = entity.ToPlayer();
             if (!IsInvisible(victim) && !IsInvisible(attacker)) return null;
             if (attacker == null) return null;
             if (IsInvisible(attacker) && HasPerm(attacker.UserIDString, PermDamage)) return null;
@@ -474,19 +595,17 @@ namespace Oxide.Plugins
             {
                 float terrainY = TerrainMeta.HeightMap.GetHeight(player.transform.position);
                 if (player.transform.position.y > terrainY)
-                    player.transform.position = new Vector3(player.transform.position.x, terrainY, player.transform.position.z);
+                    player.transform.position = new Vector3(player.transform.position.x, terrainY - 5f, player.transform.position.z);
 
                 if (!_hiddenOffline.Contains(player.userID))
                     _hiddenOffline.Add(player.userID);
 
-                _hiddenPlayers.Remove(player);
+                _hiddenPlayers.Remove(player.userID);
                 VanishPositionUpdate t;
                 if (player.TryGetComponent<VanishPositionUpdate>(out t))
                     UnityEngine.Object.Destroy(t);
             }
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
-            CuiHelper.DestroyUi(player, "VanishUI");
-            CuiHelper.DestroyUi(player, "VanishColliderUI");
         }
 
         private void OnPlayerSpectate(BasePlayer player, string spectateFilter)
@@ -505,7 +624,9 @@ namespace Oxide.Plugins
                 player.gameObject.AddComponent<VanishPositionUpdate>().EndSpectate();
         }
 
-        private object OnPlayerColliderEnable(BasePlayer player, CapsuleCollider collider) => IsInvisible(player) ? (object)true : null;
+        private object? OnPlayerColliderEnable(BasePlayer player, CapsuleCollider collider) => IsInvisible(player) ? (object)true : null;
+
+        private object? OnPlayerViolation(BasePlayer player, AntiHackType type, float amount) => IsInvisible(player) ? (object)true : null;
 
         #endregion Hooks
 
@@ -541,6 +662,7 @@ namespace Oxide.Plugins
             GameObject child;
             SphereCollider col;
             int LayerReserved1 = (int)Layer.Reserved1;
+            BUTTON _reload = BUTTON.RELOAD;
 
             private void Awake()
             {
@@ -552,12 +674,8 @@ namespace Oxide.Plugins
 
             private void FixedUpdate()
             {
-                if (player == null) return;
-
-                if (corpse != null && !player.inventory.loot.IsLooting())
-                    corpse.Kill();
-
-                if (!player.serverInput.WasJustReleased(BUTTON.RELOAD)) return;
+                if (player == null || !player.serverInput.IsDown(_reload) || !player.serverInput.WasDown(_reload)) return;
+                player.serverInput.previous.buttons = 0;
 
                 RaycastHit raycastHit;
                 if (!Physics.Raycast(player.eyes.HeadRay(), out raycastHit, 5f, Layermask))
@@ -566,58 +684,37 @@ namespace Oxide.Plugins
                 BaseEntity entity = raycastHit.GetEntity() as BaseEntity;
 
                 if (entity == null) return;
-                if (entity as StorageContainer != null)
+                if (entity is StorageContainer storageContainer)
                 {
                     StorageContainer container = (StorageContainer)entity;
-                    entity.SendAsSnapshot(player.Connection);
+                    player.inventory.loot.Clear();
                     player.inventory.loot.AddContainer(container.inventory);
-                    player.inventory.loot.entitySource = container;
+                    player.inventory.loot.entitySource = RelationshipManager.ServerInstance;
                     player.inventory.loot.PositionChecks = false;
                     player.inventory.loot.MarkDirty();
-                    player.inventory.loot.SendImmediate();
-                    player.ClientRPCPlayer<string>(null, player, "RPC_OpenLootPanel", "generic_resizable");
+                    player.SendNetworkUpdateImmediate();
+                    player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "generic_resizable");
                     return;
                 }
 
-                if (entity as BasePlayer != null)
+                if (entity is BasePlayer targetplayer)
                 {
-                    BasePlayer targetplayer = (BasePlayer)entity;
-                    corpse = GameManager.server.CreateEntity(StringPool.Get(2604534927), Vector3.zero) as LootableCorpse;
-                    corpse.CancelInvoke("RemoveCorpse");
-                    corpse.syncPosition = false;
-                    corpse.limitNetworking = true;
-                    corpse.playerName = targetplayer.displayName;
-                    corpse.playerSteamID = 0;
-                    corpse.enableSaving = false;
-                    corpse.Spawn();
-                    corpse.SetFlag(BaseEntity.Flags.Locked, true);
-                    Buoyancy bouyancy;
-                    if (corpse.TryGetComponent<Buoyancy>(out bouyancy))
-                    {
-                        Destroy(bouyancy);
-                    }
-                    Rigidbody ridgidbody;
-                    if (corpse.TryGetComponent<Rigidbody>(out ridgidbody))
-                    {
-                        Destroy(ridgidbody);
-                    }
-
-                    corpse.SendAsSnapshot(player.Connection);
+                    if (!vanish.HasPerm(player.UserIDString, PermInvView))
+                        return;
 
                     player.inventory.loot.AddContainer(targetplayer.inventory.containerMain);
                     player.inventory.loot.AddContainer(targetplayer.inventory.containerWear);
                     player.inventory.loot.AddContainer(targetplayer.inventory.containerBelt);
-                    player.inventory.loot.entitySource = corpse;
+                    player.inventory.loot.entitySource = RelationshipManager.ServerInstance;
                     player.inventory.loot.PositionChecks = false;
                     player.inventory.loot.MarkDirty();
                     player.inventory.loot.SendImmediate();
-                    player.ClientRPCPlayer<string>(null, player, "RPC_OpenLootPanel", "player_corpse");
+                    player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
                     return;
                 }
 
-                if (entity as Door != null)
+                if (entity is Door door)
                 {
-                    Door door = (Door)entity;
                     if (door.IsOpen())
                     {
                         door.SetOpen(false, true);
@@ -630,38 +727,18 @@ namespace Oxide.Plugins
                 }
 
                 BaseMountable component = entity.GetComponent<BaseMountable>();
-                if (!component)
-                {
-                    BaseVehicle componentInParent = entity.GetComponentInParent<BaseVehicle>();
-                    if (componentInParent)
-                    {
-                        if (!componentInParent.isServer)
-                        {
-                            componentInParent = BaseNetworkable.serverEntities.Find(componentInParent.net.ID) as BaseVehicle;
-                        }
-                        componentInParent.AttemptMount(player, true);
-                        return;
-                    }
-                }
-
-                if (component && !component.isServer)
-                {
-                    component = BaseNetworkable.serverEntities.Find(component.net.ID) as BaseMountable;
-                }
-                if (component)
-                {
-                    component.AttemptMount(player, true);
-                }
+                if (component == null)
+                    return;
+                component.AttemptMount(player, true);
 
             }
 
             private void UpdatePos()
             {
-                if (player == null || player.IsSpectating())
+                if (player == null)
                     return;
 
-                using (TimeWarning.New("UpdateVanishGroup"))
-                    player.net.UpdateGroups(player.transform.position);
+                player.net.UpdateGroups(player.transform.position);
             }
 
             void OnTriggerEnter(Collider col)
@@ -669,18 +746,25 @@ namespace Oxide.Plugins
                 TriggerParent triggerParent = col.GetComponentInParent<TriggerParent>();
                 if (triggerParent != null)
                 {
-                    triggerParent.OnEntityEnter(player);
+                    triggerParent.OnTriggerEnter(player.playerCollider);
                     return;
                 }
                 TriggerWorkbench triggerWorkbench = col.GetComponentInParent<TriggerWorkbench>();
-                if (triggerWorkbench != null)
+                if (triggerWorkbench == null)
+                    return;
+
+                player.EnterTrigger(triggerWorkbench);
+                player.nextCheckTime = float.MaxValue;
+                player.cachedCraftLevel = triggerWorkbench.parentBench.Workbenchlevel;
+
+                switch (player.cachedCraftLevel)
                 {
-                    player.EnterTrigger(triggerWorkbench);
-                    player.nextCheckTime = float.MaxValue;
-                    player.cachedCraftLevel = triggerWorkbench.parentBench.Workbenchlevel;
-                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, player.cachedCraftLevel == 1f);
-                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, player.cachedCraftLevel == 2f);
-                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench3, player.cachedCraftLevel == 3f);
+                    case 1:
+                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
+                    case 2:
+                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
+                    case 3:
+                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
                 }
             }
 
@@ -689,7 +773,7 @@ namespace Oxide.Plugins
                 TriggerParent triggerParent = col.GetComponentInParent<TriggerParent>();
                 if (triggerParent != null)
                 {
-                    triggerParent.OnEntityLeave(player);
+                    triggerParent.OnTriggerExit(player.playerCollider);
                     return;
                 }
                 TriggerWorkbench triggerWorkbench = col.GetComponentInParent<TriggerWorkbench>();
@@ -738,9 +822,6 @@ namespace Oxide.Plugins
             {
                 CancelInvoke(UpdatePos);
 
-                if (corpse != null)
-                    corpse.Kill();
-
                 if (player != null)
                 {
                     if (player.IsConnected)
@@ -751,7 +832,7 @@ namespace Oxide.Plugins
                     player.transform.localScale = new Vector3(1, 1, 1);
 
                     //Reset Triggers
-                    if (player?.triggers != null)
+                    if (player.triggers != null)
                     {
                         for (int i = player.triggers.Count - 1; i >= 0; i--)
                         {
@@ -763,7 +844,7 @@ namespace Oxide.Plugins
                         }
                     }
 
-                    //Rest Workbench Level
+                    //Reset Workbench Level
                     player.cachedCraftLevel = 0f;
                     player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, false);
                     player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, false);
@@ -784,7 +865,17 @@ namespace Oxide.Plugins
         #endregion Monobehaviour
 
         #region Helpers
+        private BasePlayer? GetPlayer(ulong steamID)
+        {
+            foreach (var player in BasePlayer.allPlayerList)
+            {
+                if (player.userID.Get() != steamID)
+                    continue;
 
+                return player;
+            }
+            return null;
+        }
         private void AddLocalizedCommand(string command)
         {
             foreach (string language in lang.GetLanguages(this))
@@ -822,6 +913,7 @@ namespace Oxide.Plugins
         {
             foreach (var hook in _registeredhooks)
                 Subscribe(hook);
+
         }
 
         private static void SendEffect(BasePlayer player, string sound) => EffectNetwork.Send(new Effect(sound, player, 0, Vector3.zero, Vector3.forward), player.net.connection);
