@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.0")]
+    [Info("Vanish", "Whispers88", "1.3.1")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -20,7 +20,7 @@ namespace Oxide.Plugins
         private readonly List<BasePlayer> _hiddenOffline = new List<BasePlayer>();
         private static List<string> _registeredhooks = new List<string> { "OnNpcTarget", "CanBeTargeted", "CanHelicopterTarget", "CanHelicopterStrafeTarget", "CanBradleyApcTarget", "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerDisconnected" };
         private static readonly DamageTypeList _EmptyDmgList = new DamageTypeList();
-        private static readonly Dictionary<ulong, string> GuiGuids = new Dictionary<ulong, string>();
+        CuiElementContainer cachedVanishUI = null;
 
         private Configuration config;
 
@@ -137,6 +137,8 @@ namespace Oxide.Plugins
 
         private void Init()
         {
+            cachedVanishUI = CreateVanishUI();
+
             // Register univeral chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
             AddLocalizedCommand(nameof(CollisionToggle));
@@ -152,30 +154,20 @@ namespace Oxide.Plugins
 
             foreach (var player in BasePlayer.activePlayerList)
             {
-                if (HasPerm(player.UserIDString, permavanish))
-                {
-                    if (!IsInvisible(player)) Disappear(player);
-                }
-            }
+                if (!HasPerm(player.UserIDString, permavanish)) continue;
 
+                if (!IsInvisible(player)) Disappear(player);
+            }
         }
 
         private void Unload()
         {
-            for (int i = _hiddenPlayers.Count - 1; i >= 0; i--)
+            foreach (var player in _hiddenPlayers)
             {
-                var player = _hiddenPlayers[i];
-                if (player != null) Reappear(player);
+                if (player == null) continue;
+                Reappear(player);
             }
-
-            foreach (var key in GuiGuids.Keys)
-            {
-                var player = BasePlayer.FindByID(key);
-                if (player != null) CuiHelper.DestroyUi(player, GuiGuids[key]);
-            }
-
             _hiddenPlayers.Clear();
-            GuiGuids.Clear();
         }
 
         #endregion Initialization
@@ -197,18 +189,18 @@ namespace Oxide.Plugins
             }
             if (IsInvisible(player)) Reappear(player);
             else Disappear(player);
-            
+
         }
 
         private void CollisionToggle(IPlayer iplayer, string command, string[] args)
         {
             var player = (BasePlayer)iplayer.Object;
+            if (!IsInvisible(player)) return;
             if (!HasPerm(player.UserIDString, permcollision))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
             }
-            if (!IsInvisible(player)) return;
             var col = player.gameObject.GetComponent<Collider>();
             if (!col.enabled)
             {
@@ -246,14 +238,11 @@ namespace Oxide.Plugins
                 }
             }
 
-            string guiId;
-            if (GuiGuids.TryGetValue(player.userID, out guiId)) CuiHelper.DestroyUi(player, guiId);
+            CuiHelper.DestroyUi(player, "VanishUI");
 
             if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand("noclip");
 
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
-
-            UnityEngine.Object.Destroy(player.GetComponent<GroupSwitchTimer>());
         }
 
         private void Disappear(BasePlayer player)
@@ -270,7 +259,6 @@ namespace Oxide.Plugins
             player.UpdatePlayerCollider(false);
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
-            player.gameObject.AddComponent<GroupSwitchTimer>();
             _hiddenPlayers.Add(player);
 
             if (config.EnableSound)
@@ -286,7 +274,7 @@ namespace Oxide.Plugins
             }
             if (config.NoClipOnVanish && !player.IsFlying) player.SendConsoleCommand("noclip");
 
-            if (config.EnableGUI) VanishGui(player);
+            if (config.EnableGUI) CuiHelper.AddUi(player, cachedVanishUI);
 
             if (config.EnableNotifications) Message(player.IPlayer, "Vanished");
         }
@@ -353,69 +341,32 @@ namespace Oxide.Plugins
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             _hiddenPlayers.Remove(player);
-            string guiId;
-            if (GuiGuids.TryGetValue(player.userID, out guiId))
-            {
-                CuiHelper.DestroyUi(player, guiId);
-                GuiGuids.Remove(player.userID);
-            }
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
             if (config.HideOnReconnect) _hiddenOffline.Add(player);
-
-            UnityEngine.Object.Destroy(player.GetComponent<GroupSwitchTimer>());
+            CuiHelper.DestroyUi(player, "VanishUI");
         }
         #endregion Hooks
 
-        #region FacePunch Behaviour 
-        public class GroupSwitchTimer : FacepunchBehaviour
-        {
-            private BasePlayer _player;
-
-            private void Awake()
-            {
-                _player = GetComponent<BasePlayer>();
-                InvokeRepeating("UpdateNetworkGroups", 2f, 1f);
-            }
-
-            private void UpdateNetworkGroups()
-            {
-                using (TimeWarning.New("VanishGroup"))
-                    _player.net.UpdateGroups(_player.transform.position);
-            }
-        }
-        #endregion
-
         #region GUI
 
-        private void VanishGui(BasePlayer player)
+        private CuiElementContainer CreateVanishUI()
         {
-            string guiId;
-            if (GuiGuids.TryGetValue(player.userID, out guiId))
-            {
-                CuiHelper.DestroyUi(player, guiId);
-            }
-
             CuiElementContainer elements = new CuiElementContainer();
-            GuiGuids[player.userID] = CuiHelper.GetGuid();
+            string panel = elements.Add(new CuiPanel
+            {
+                Image = { Color = "0.5 0.5 0.5 0.0" },
+                RectTransform = { AnchorMin = config.ImageAnchorMin, AnchorMax = config.ImageAnchorMax }
+            }, "Hud.Menu", "VanishUI");
             elements.Add(new CuiElement
             {
-                Name = GuiGuids[player.userID],
+                Parent = panel,
                 Components =
                 {
-                    new CuiRawImageComponent
-                    {
-                        Color = config.ImageColor,
-                        Url = config.ImageUrlIcon
-                    },
-                    new CuiRectTransformComponent
-                    {
-                        AnchorMin = config.ImageAnchorMin,
-                        AnchorMax = config.ImageAnchorMax
-                    }
+                    new CuiRawImageComponent {Color = config.ImageColor, Url = config.ImageUrlIcon},
+                    new CuiRectTransformComponent {AnchorMin = "0 0", AnchorMax = "1 1"}
                 }
             });
-
-            CuiHelper.AddUi(player, elements);
+            return elements;
         }
 
         #endregion GUI
@@ -429,13 +380,11 @@ namespace Oxide.Plugins
                 Dictionary<string, string> messages = lang.GetMessages(language, this);
                 foreach (KeyValuePair<string, string> message in messages)
                 {
-                    if (message.Key.Equals(command))
-                    {
-                        if (!string.IsNullOrEmpty(message.Value))
-                        {
-                            AddCovalenceCommand(message.Value, command);
-                        }
-                    }
+                    if (!message.Key.Equals(command)) continue;
+
+                    if (string.IsNullOrEmpty(message.Value)) continue;
+
+                    AddCovalenceCommand(message.Value, command);
                 }
             }
         }
@@ -477,10 +426,7 @@ namespace Oxide.Plugins
         #region Public Helpers
         public void _Disappear(BasePlayer basePlayer) => Disappear(basePlayer);
         public void _Reappear(BasePlayer basePlayer) => Reappear(basePlayer);
-        public void _VanishGui(BasePlayer basePlayer) => VanishGui(basePlayer);
         public bool _IsInvisible(BasePlayer basePlayer) => IsInvisible(basePlayer);
-
         #endregion
-
     }
 }
