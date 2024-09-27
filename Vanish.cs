@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.1")]
+    [Info("Vanish", "nivex", "0.7.2")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -132,23 +132,22 @@ namespace Oxide.Plugins
         #region Initialization
 
         private const string permAbilitiesInvulnerable = "vanish.abilities.invulnerable";
-        private const string permAbilitiesPersistence = "vanish.abilities.persistence";
         private const string permAbilitiesTeleport = "vanish.abilities.teleport";
-        private const string permAbilitiesWeapons = "vanish.abilities.weapons";
+        private const string permAbilitiesHideWeapons = "vanish.abilities.hideweapons";
         private const string permDamageAnimals = "vanish.damage.animals";
         private const string permDamageBuildings = "vanish.damage.buildings";
         private const string permDamagePlayers = "vanish.damage.players";
         private const string permUse = "vanish.use";
+        private bool soundEffectIsValid;
 
         long TimeStamp() => (DateTime.Now.Ticks - DateTime.Parse("01/01/1970 00:00:00").Ticks) / 10000000;
 
         private void Init()
         {
-			ins = this;
+            ins = this;
             permission.RegisterPermission(permAbilitiesInvulnerable, this);
-            permission.RegisterPermission(permAbilitiesPersistence, this);
             permission.RegisterPermission(permAbilitiesTeleport, this);
-            permission.RegisterPermission(permAbilitiesWeapons, this);
+            permission.RegisterPermission(permAbilitiesHideWeapons, this);
             permission.RegisterPermission(permDamageAnimals, this);
             permission.RegisterPermission(permDamageBuildings, this);
             permission.RegisterPermission(permDamagePlayers, this);
@@ -166,9 +165,9 @@ namespace Oxide.Plugins
 
         private void Loaded()
         {
-            soundEffects = !string.IsNullOrEmpty(config.DefaultEffect) && Prefab.DefaultManager.FindPrefab(config.DefaultEffect) != null;
-            
-            if (!string.IsNullOrEmpty(config.DefaultEffect) && !soundEffects && config.PlaySoundEffect)
+            soundEffectIsValid = !string.IsNullOrEmpty(config.DefaultEffect) && Prefab.DefaultManager.FindPrefab(config.DefaultEffect) != null;
+
+            if (!string.IsNullOrEmpty(config.DefaultEffect) && !soundEffectIsValid && config.PlaySoundEffect)
             {
                 Puts(Lang("InvalidSoundPrefab", null, config.DefaultEffect));
             }
@@ -191,7 +190,7 @@ namespace Oxide.Plugins
 
         private void OnServerInitialized()
         {
-            foreach(var basePlayer in BasePlayer.activePlayerList)
+            foreach (var basePlayer in BasePlayer.activePlayerList)
             {
                 OnPlayerInit(basePlayer);
             }
@@ -207,7 +206,7 @@ namespace Oxide.Plugins
             {
                 Unsubscribe(nameof(CanNetworkTo));
             }
-            else
+            else if (Interface.CallHook("OnVanishNetwork") == null)
             {
                 Subscribe(nameof(CanNetworkTo));
             }
@@ -230,6 +229,11 @@ namespace Oxide.Plugins
             Subscribe(nameof(OnEntityTakeDamage));
             Subscribe(nameof(OnPlayerSleepEnded));
             Subscribe(nameof(OnPlayerLand));
+        }
+
+        private void UnsubscribeNetwork()
+        {
+            Unsubscribe(nameof(CanNetworkTo));
         }
 
         private void Unsubscribe()
@@ -295,12 +299,12 @@ namespace Oxide.Plugins
         private class WeaponBlock : FacepunchBehaviour
         {
             private BasePlayer basePlayer;
-            private Item lastActiveItem;
+            private uint svActiveItemID;
 
             private void Awake()
             {
                 basePlayer = GetComponent<BasePlayer>();
-                lastActiveItem = null;
+                svActiveItemID = basePlayer.svActiveItemID;
                 InvokeRepeating(Repeater, 0f, 0.1f);
             }
 
@@ -312,15 +316,14 @@ namespace Oxide.Plugins
                     return;
                 }
 
-                var activeItem = basePlayer.GetActiveItem();
+                var activeItem = basePlayer.svActiveItemID;
 
-                if (activeItem == lastActiveItem)
+                if (activeItem == svActiveItemID)
                 {
                     return;
                 }
 
-                lastActiveItem = activeItem;
-
+                svActiveItemID = activeItem;
                 if (ins.IsInvisible(basePlayer))
                 {
                     HeldEntity heldEntity = basePlayer.GetHeldEntity();
@@ -347,6 +350,7 @@ namespace Oxide.Plugins
         [OnlinePlayers]
         private Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
 
+        private Dictionary<ulong, Timer> timers = new Dictionary<ulong, Timer>();
         private static StoredData storedData = new StoredData();
         private class StoredData
         {
@@ -382,8 +386,6 @@ namespace Oxide.Plugins
 
         #region Commands
 
-        private bool soundEffects;
-
         private void VanishCommand(IPlayer player, string command, string[] args)
         {
             BasePlayer basePlayer = player.Object as BasePlayer;
@@ -411,13 +413,13 @@ namespace Oxide.Plugins
                 else
                 {
                     var limit = storedData.Limits[player.Id];
-                    
+
                     if (DateTime.Parse(limit.Date).Day < DateTime.Now.Day)
                     {
                         limit.Date = DateTime.Now.ToString();
                         limit.Uses = 0;
                     }
-                    else if (limit.Uses > config.DailyLimit && !IsInvisible(basePlayer))
+                    else if (++limit.Uses > config.DailyLimit && !IsInvisible(basePlayer))
                     {
                         Message(player, Lang("DailyLimitReached", player.Id, config.DailyLimit));
                         return;
@@ -438,7 +440,7 @@ namespace Oxide.Plugins
                 storedData.Cooldowns.Remove(player.Id);
             }
 
-            if (config.PlaySoundEffect && soundEffects)
+            if (config.PlaySoundEffect && soundEffectIsValid)
             {
                 Effect.server.Run(config.DefaultEffect, basePlayer.transform.position);
             }
@@ -446,11 +448,6 @@ namespace Oxide.Plugins
             if (IsInvisible(basePlayer))
             {
                 Reappear(basePlayer);
-
-                if (basePlayer.GetComponent<Runner>() != null)
-                {
-                    GameObject.Destroy(basePlayer.GetComponent<Runner>());
-                }
             }
             else
             {
@@ -472,11 +469,16 @@ namespace Oxide.Plugins
 
         #region Vanishing Act
 
-        private void Disappear(BasePlayer basePlayer)
+        private void Disappear(BasePlayer basePlayer, bool showNotification = true)
         {
             if (Interface.CallHook("OnVanishDisappear", basePlayer) != null)
             {
                 return;
+            }
+
+            if (onlinePlayers[basePlayer] == null)
+            {
+                onlinePlayers[basePlayer] = new OnlinePlayer();
             }
 
             List<Connection> connections = new List<Connection>();
@@ -513,36 +515,40 @@ namespace Oxide.Plugins
 
             basePlayer.UpdatePlayerCollider(false);
 
-            if (onlinePlayers[basePlayer] != null)
+            onlinePlayers[basePlayer].IsInvisible = true;
+
+            if (basePlayer.GetComponent<WeaponBlock>() == null && basePlayer.IPlayer.HasPermission(permAbilitiesHideWeapons))
             {
-                onlinePlayers[basePlayer].IsInvisible = true;
-
-                if (basePlayer.GetComponent<WeaponBlock>() == null && basePlayer.IPlayer.HasPermission(permAbilitiesWeapons))
-                {
-                    basePlayer.gameObject.AddComponent<WeaponBlock>();
-                }
-
-                if (config.AppearWhileRunning && basePlayer.GetComponent<Runner>() == null)
-                {
-                    basePlayer.gameObject.AddComponent<Runner>();
-                }
+                basePlayer.gameObject.AddComponent<WeaponBlock>();
             }
 
-            if (config.ShowGuiIcon)
+            if (config.AppearWhileRunning && basePlayer.GetComponent<Runner>() == null)
             {
-                VanishGui(basePlayer);
+                basePlayer.gameObject.AddComponent<Runner>();
             }
 
-            Message(basePlayer.IPlayer, "VanishEnabled");
-
-            if (config.VanishTimeout > 0f) timer.Once(config.VanishTimeout, () =>
+            if (config.VanishTimeout > 0f)
             {
-                if (IsInvisible(basePlayer))
+                ulong userId = basePlayer.userID;
+
+                if (timers.ContainsKey(userId))
                 {
-                    Reappear(basePlayer);
-                    Message(basePlayer.IPlayer, "VanishTimedOut");
+                    timers[userId].Reset();
                 }
-            });
+                else
+                {
+                    timers.Add(userId, timer.Once(config.VanishTimeout, () =>
+                    {
+                        if (basePlayer != null && basePlayer.IsConnected && IsInvisible(basePlayer))
+                        {
+                            Reappear(basePlayer);
+                            Message(basePlayer.IPlayer, "VanishTimedOut");
+                        }
+
+                        timers.Remove(userId);
+                    }));
+                }
+            }
 
             if (!storedData.Invisible.Contains(basePlayer.userID))
             {
@@ -550,6 +556,16 @@ namespace Oxide.Plugins
             }
 
             Subscribe();
+
+            if (config.ShowGuiIcon)
+            {
+                VanishGui(basePlayer);
+            }
+
+            if (showNotification)
+            {
+                Message(basePlayer.IPlayer, "VanishEnabled");
+            }
         }
 
         // Hide from other players
@@ -616,6 +632,16 @@ namespace Oxide.Plugins
             return null;
         }
 
+        /*private object OnNpcPlayerTarget(HTNPlayer htnPlayer, BasePlayer basePlayer)
+        {
+            if (IsInvisible(basePlayer))
+            {
+                return true; // Cancel, not a bool hook
+            }
+
+            return null;
+        }*/
+
         // Hide from all other NPCs
         private object OnNpcTarget(BaseNpc npc, BaseEntity entity)
         {
@@ -631,7 +657,7 @@ namespace Oxide.Plugins
         // Disappear when waking up if vanished
         private void OnPlayerSleepEnded(BasePlayer basePlayer)
         {
-            if (basePlayer == null || basePlayer.net == null)
+            if (!basePlayer || !basePlayer.IsConnected)
             {
                 return;
             }
@@ -645,22 +671,18 @@ namespace Oxide.Plugins
                 else
                 {
                     Reappear(basePlayer);
-                }                
+                }
             }
             else if (storedData.Invisible.Contains(basePlayer.userID))
             {
-                if (!basePlayer.IPlayer.HasPermission(permUse))
+                if (basePlayer.IPlayer.HasPermission(permUse))
+                {
+                    Disappear(basePlayer);
+                }
+                else
                 {
                     storedData.Invisible.Remove(basePlayer.userID);
-                    return;
                 }
-
-                Disappear(basePlayer);                
-            }
-
-            if (IsInvisible(basePlayer))
-            {
-                VanishGui(basePlayer);
             }
         }
 
@@ -680,7 +702,7 @@ namespace Oxide.Plugins
         {
             if (IsInvisible(player))
             {
-                return true; // Cancel, not a bool hook
+                return false;
             }
 
             return null;
@@ -691,7 +713,7 @@ namespace Oxide.Plugins
         {
             if (IsInvisible(player))
             {
-                return true; // Cancel, not a bool hook
+                return true;
             }
 
             return null;
@@ -761,6 +783,11 @@ namespace Oxide.Plugins
                 {
                     GameObject.Destroy(basePlayer.GetComponent<WeaponBlock>());
                 }
+
+                if (basePlayer.GetComponent<Runner>() != null)
+                {
+                    GameObject.Destroy(basePlayer.GetComponent<Runner>());
+                }
             }
             basePlayer.SendNetworkUpdate();
             basePlayer.limitNetworking = false;
@@ -783,7 +810,7 @@ namespace Oxide.Plugins
             Message(basePlayer.IPlayer, "VanishDisabled");
             if (onlinePlayers.Values.Count(p => p.IsInvisible) <= 0)
             {
-                Unsubscribe();
+                Unsubscribe(nameof(CanNetworkTo));
             }
             Interface.CallHook("OnVanishReappear", basePlayer);
             storedData.Invisible.Remove(basePlayer.userID);
@@ -797,6 +824,17 @@ namespace Oxide.Plugins
 
         private void VanishGui(BasePlayer basePlayer)
         {
+            if (!basePlayer || !basePlayer.IsConnected || !IsInvisible(basePlayer))
+            {
+                return;
+            }
+
+            if (basePlayer.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
+            {
+                timer.Once(0.1f, () => VanishGui(basePlayer));
+                return;
+            }
+
             string gui;
             if (guiInfo.TryGetValue(basePlayer.userID, out gui))
             {
@@ -926,13 +964,9 @@ namespace Oxide.Plugins
 
             if (storedData.Invisible.Contains(basePlayer.userID))
             {
-                if (!basePlayer.IPlayer.HasPermission(permUse))
+                if (basePlayer.IPlayer.HasPermission(permUse))
                 {
-                    storedData.Invisible.Remove(basePlayer.userID);
-                }
-                else
-                {
-                    Disappear(basePlayer);
+                    Disappear(basePlayer, false);
                 }
             }
         }
@@ -945,10 +979,10 @@ namespace Oxide.Plugins
         {
             if (!Interface.Oxide.IsShuttingDown)
             {
-                foreach (BasePlayer basePlayer in BasePlayer.activePlayerList)
+                foreach (BasePlayer basePlayer in BasePlayer.activePlayerList.Where(p => p != null))
                 {
                     string gui;
-                    if (guiInfo.TryGetValue(basePlayer?.userID ?? 0uL, out gui))
+                    if (guiInfo.TryGetValue(basePlayer.userID, out gui))
                     {
                         CuiHelper.DestroyUi(basePlayer, gui);
                     }
@@ -982,7 +1016,7 @@ namespace Oxide.Plugins
                     storedData.Limits.Remove(entry.Key);
                 }
             }
-            
+
             SaveData();
         }
 
