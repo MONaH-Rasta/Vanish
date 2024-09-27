@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.6")]
+    [Info("Vanish", "nivex", "0.7.7")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -1034,7 +1034,10 @@ namespace Oxide.Plugins
                     OnlinePlayer player;
                     if (onlinePlayers.TryGetValue(basePlayer, out player))
                     {
-                        Reappear(basePlayer);
+                        if (player.IsInvisible)
+                        {
+                            Reappear(basePlayer);
+                        }
                     }
                 }
 
