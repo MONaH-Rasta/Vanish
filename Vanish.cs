@@ -20,7 +20,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Wulf/lukespragg", "0.5.8")]
+    [Info("Vanish", "Wulf/lukespragg", "0.5.9")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -145,12 +145,10 @@ namespace Oxide.Plugins
             if (config.PerformanceMode)
             {
                 Unsubscribe(nameof(CanNetworkTo));
-                Unsubscribe(nameof(OnPlayerTick));
             }
             else
             {
                 Subscribe(nameof(CanNetworkTo));
-                Subscribe(nameof(OnPlayerTick));
             }
 
             Subscribe(nameof(CanBeTargeted));
@@ -172,12 +170,38 @@ namespace Oxide.Plugins
             Unsubscribe(nameof(OnEntityTakeDamage));
             Unsubscribe(nameof(OnPlayerSleepEnded));
             Unsubscribe(nameof(OnPlayerLand));
-            Unsubscribe(nameof(OnPlayerTick));
         }
 
         #endregion Initialization
 
         #region Data Storage
+
+        private class WeaponBlock : MonoBehaviour
+        {
+            private BasePlayer basePlayer;
+
+            private void Awake()
+            {
+                basePlayer = GetComponent<BasePlayer>();
+            }
+
+            private void FixedUpdate()
+            {
+                if (onlinePlayers[basePlayer] != null && onlinePlayers[basePlayer].IsInvisible)
+                {
+                    HeldEntity heldEntity = basePlayer.GetHeldEntity();
+                    if (heldEntity != null && basePlayer.IPlayer.HasPermission(permAbilitiesWeapons))
+                    {
+                        heldEntity.SetHeld(false);
+                    }
+                }
+            }
+
+            private void OnDestroy()
+            {
+                UnityEngine.GameObject.Destroy(this);
+            }
+        }
 
         private class OnlinePlayer
         {
@@ -186,7 +210,7 @@ namespace Oxide.Plugins
         }
 
         [OnlinePlayers]
-        private Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
+        private static Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
 
         #endregion Data Storage
 
@@ -230,6 +254,11 @@ namespace Oxide.Plugins
 
         private void Disappear(BasePlayer basePlayer)
         {
+            if (Interface.CallHook("OnVanishDisappear") != null)
+            {
+                return;
+            }
+
             List<Connection> connections = new List<Connection>();
             foreach (BasePlayer target in BasePlayer.activePlayerList)
             {
@@ -272,6 +301,11 @@ namespace Oxide.Plugins
             if (onlinePlayers[basePlayer] != null)
             {
                 onlinePlayers[basePlayer].IsInvisible = true;
+
+                if (basePlayer.GetComponent<WeaponBlock>() == null)
+                {
+                    basePlayer.gameObject.AddComponent<WeaponBlock>();
+                }
             }
             Message(basePlayer.IPlayer, "VanishEnabled");
 
@@ -439,6 +473,11 @@ namespace Oxide.Plugins
             if (onlinePlayers[basePlayer] != null)
             {
                 onlinePlayers[basePlayer].IsInvisible = false;
+
+                if (basePlayer.GetComponent<WeaponBlock>() != null)
+                {
+                    UnityEngine.GameObject.Destroy(basePlayer.GetComponent<WeaponBlock>());
+                }
             }
             basePlayer.SendNetworkUpdate();
             basePlayer.limitNetworking = false;
@@ -463,6 +502,7 @@ namespace Oxide.Plugins
             {
                 Unsubscribe(nameof(CanNetworkTo));
             }
+            Interface.CallHook("OnVanishReappear", basePlayer);
         }
 
         #endregion Reappearing Act
@@ -577,22 +617,6 @@ namespace Oxide.Plugins
 
         #endregion Damage Blocking
 
-        #region Weapon Blocking
-
-        private void OnPlayerTick(BasePlayer basePlayer)
-        {
-            if (onlinePlayers[basePlayer] != null && onlinePlayers[basePlayer].IsInvisible)
-            {
-                HeldEntity heldEntity = basePlayer.GetHeldEntity();
-                if (heldEntity != null && basePlayer.IPlayer.HasPermission(permAbilitiesWeapons))
-                {
-                    heldEntity.SetHeld(false);
-                }
-            }
-        }
-
-        #endregion Weapon Blocking
-
         #region Teleport Blocking
 
         private object CanTeleport(BasePlayer basePlayer)
@@ -611,10 +635,10 @@ namespace Oxide.Plugins
 
         #region Persistence Handling
 
-        private void OnPlayerInit(BasePlayer basePlayer)
+        /*private void OnPlayerInit(BasePlayer basePlayer)
         {
             // TODO: Persistence permission check and handling
-        }
+        }*/
 
         #endregion Persistence Handling
 
@@ -628,6 +652,16 @@ namespace Oxide.Plugins
                 if (guiInfo.TryGetValue(basePlayer.userID, out gui))
                 {
                     CuiHelper.DestroyUi(basePlayer, gui);
+                }                
+            }
+
+            var objects = UnityEngine.Object.FindObjectsOfType(typeof(WeaponBlock));
+
+            if (objects != null)
+            {
+                foreach (var gameObj in objects)
+                {
+                    UnityEngine.Object.Destroy(gameObj);
                 }
             }
         }
