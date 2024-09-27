@@ -20,7 +20,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Wulf/lukespragg", "0.5.9")]
+    [Info("Vanish", "Wulf/lukespragg", "0.6.0")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -176,21 +176,33 @@ namespace Oxide.Plugins
 
         #region Data Storage
 
-        private class WeaponBlock : MonoBehaviour
+        private class WeaponBlock : FacepunchBehaviour
         {
             private BasePlayer basePlayer;
+            private Item lastActiveItem;
 
             private void Awake()
             {
                 basePlayer = GetComponent<BasePlayer>();
+                lastActiveItem = null;
+                InvokeRepeating(Repeater, 0f, 0.1f);
             }
 
-            private void FixedUpdate()
+            private void Repeater()
             {
+                var activeItem = basePlayer.GetActiveItem();
+
+                if (activeItem == lastActiveItem)
+                {
+                    return;
+                }
+
+                lastActiveItem = activeItem;
+
                 if (onlinePlayers[basePlayer] != null && onlinePlayers[basePlayer].IsInvisible)
                 {
                     HeldEntity heldEntity = basePlayer.GetHeldEntity();
-                    if (heldEntity != null && basePlayer.IPlayer.HasPermission(permAbilitiesWeapons))
+                    if (heldEntity != null)
                     {
                         heldEntity.SetHeld(false);
                     }
@@ -199,6 +211,7 @@ namespace Oxide.Plugins
 
             private void OnDestroy()
             {
+                CancelInvoke(Repeater);
                 UnityEngine.GameObject.Destroy(this);
             }
         }
@@ -302,7 +315,7 @@ namespace Oxide.Plugins
             {
                 onlinePlayers[basePlayer].IsInvisible = true;
 
-                if (basePlayer.GetComponent<WeaponBlock>() == null)
+                if (basePlayer.GetComponent<WeaponBlock>() == null && basePlayer.IPlayer.HasPermission(permAbilitiesWeapons))
                 {
                     basePlayer.gameObject.AddComponent<WeaponBlock>();
                 }
