@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.1.2")]
+    [Info("Vanish", "Whispers88", "1.2.2")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -35,8 +35,14 @@ namespace Oxide.Plugins
             [JsonProperty("If a player was vanished on disconnection keep them vanished on reconnect")]
             public bool HideOnReconnect = true;
 
+            [JsonProperty("Turn off fly hack detection for players in vanish")]
+            public bool AntiFlyHack = true;
+
             [JsonProperty("Enable vanishing and reappearing sound effects")]
             public bool EnableSound = true;
+
+            [JsonProperty("Make sound effects public")]
+            public bool PublicSound = false;
 
             [JsonProperty("Enable chat notifications")]
             public bool EnableNotifications = true;
@@ -127,7 +133,7 @@ namespace Oxide.Plugins
         private const string permunlock = "vanish.unlock";
         private const string permdamage = "vanish.damage";
         private const string permavanish = "vanish.permanent";
-        private const string permcollision = "vanish.collsion";
+        private const string permcollision = "vanish.collision";
 
         private void Init()
         {
@@ -141,12 +147,15 @@ namespace Oxide.Plugins
             permission.RegisterPermission(permdamage, this);
             permission.RegisterPermission(permavanish, this);
             permission.RegisterPermission(permcollision, this);
-
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
 
             //Rename old permissions
-            if (config.RenamePerms) RenamePerms("vanish.use", "vanish.allow");
+            if (config.RenamePerms)
+            {
+                RenamePerms("vanish.use", "vanish.allow");
+                RenamePerms("vanish.collsion", "vanish.collision");
+            }
 
             foreach (var player in BasePlayer.activePlayerList)
             {
@@ -207,7 +216,7 @@ namespace Oxide.Plugins
             }
             if (!IsInvisible(player)) return;
             var col = player.gameObject.GetComponent<Collider>();
-            if(!col.enabled)
+            if (!col.enabled)
             {
                 player.UpdatePlayerCollider(true);
                 Message(player.IPlayer, "ColliderEnbabled");
@@ -220,7 +229,7 @@ namespace Oxide.Plugins
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
-
+            if (config.AntiFlyHack) player.ResetAntiHack();
             player._limitedNetworking = false;
             player.UpdatePlayerCollider(true);
             player.SendNetworkUpdate();
@@ -231,9 +240,20 @@ namespace Oxide.Plugins
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
-            if (config.EnableSound) SendEffect(player, config.ReappearSoundEffect);
+            if (config.EnableSound)
+            {
+                if (config.PublicSound)
+                {
+                    Effect.server.Run(config.ReappearSoundEffect, player.transform.position);
+                }
+                else
+                {
+                    SendEffect(player, config.ReappearSoundEffect);
+                }
+            }
 
-            if (GuiGuids.ContainsKey(player.userID)) CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
+            string guiId;
+            if (GuiGuids.TryGetValue(player.userID, out guiId)) CuiHelper.DestroyUi(player, guiId);
 
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
@@ -242,10 +262,11 @@ namespace Oxide.Plugins
         {
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
 
+            if (config.AntiFlyHack) player.PauseFlyHackDetection();
             //Mute Player Effects
             player.fallDamageEffect = new GameObjectRef();
             player.drownEffect = new GameObjectRef();
-
+            AntiHack.ShouldIgnore(player);
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
             player._limitedNetworking = true;
             player.UpdatePlayerCollider(false);
@@ -254,7 +275,17 @@ namespace Oxide.Plugins
 
             _hiddenPlayers.Add(player);
 
-            if (config.EnableSound) SendEffect(player, config.VanishSoundEffect);
+            if (config.EnableSound)
+            {
+                if (config.PublicSound)
+                {
+                    Effect.server.Run(config.VanishSoundEffect, player.transform.position);
+                }
+                else
+                {
+                    SendEffect(player, config.VanishSoundEffect);
+                }
+            }
 
             if (config.EnableGUI) VanishGui(player);
 
@@ -264,21 +295,21 @@ namespace Oxide.Plugins
         #endregion Commands
 
         #region Hooks
-        private void OnPlayerInit(BasePlayer player)
+        private void OnPlayerConnected(BasePlayer player)
         {
             if (HasPerm(player.UserIDString, permavanish) || _hiddenOffline.Contains(player))
             {
                 if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
                 {
-                    timer.In(3, () => OnPlayerInit(player));
+                    timer.In(3, () => OnPlayerConnected(player));
                     return;
                 }
                 Disappear(player);
             }
         }
 
-        private object OnNpcTarget(BaseEntity entity, BaseEntity target) => IsInvisible(target?.ToPlayer()) ? (object)true : null;
-        private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player?.ToPlayer()) ? (object)false : null;
+        private object OnNpcTarget(BaseEntity entity, BasePlayer target) => IsInvisible(target) ? (object)true : null;
+        private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player) ? (object)false : null;
         private object CanHelicopterTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanHelicopterStrafeTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanBradleyApcTarget(BradleyAPC apc, BasePlayer player) => IsInvisible(player) ? (object)false : null;
@@ -323,16 +354,15 @@ namespace Oxide.Plugins
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             _hiddenPlayers.Remove(player);
-            if (GuiGuids.ContainsKey(player.userID))
+            string guiId;
+            if (GuiGuids.TryGetValue(player.userID, out guiId))
             {
-                CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
+                CuiHelper.DestroyUi(player, guiId);
                 GuiGuids.Remove(player.userID);
             }
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
             if (config.HideOnReconnect) _hiddenOffline.Add(player);
-
         }
-
         #endregion Hooks
 
         #region GUI
