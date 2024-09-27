@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.1")]
+    [Info("Vanish", "Whispers88", "1.3.2")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -272,7 +272,7 @@ namespace Oxide.Plugins
                     SendEffect(player, config.VanishSoundEffect);
                 }
             }
-            if (config.NoClipOnVanish && !player.IsFlying) player.SendConsoleCommand("noclip");
+            if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted) player.SendConsoleCommand("noclip");
 
             if (config.EnableGUI) CuiHelper.AddUi(player, cachedVanishUI);
 
@@ -284,13 +284,18 @@ namespace Oxide.Plugins
         #region Hooks
         private void OnPlayerConnected(BasePlayer player)
         {
-            if (HasPerm(player.UserIDString, permavanish) || _hiddenOffline.Contains(player))
+            if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
             {
-                if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
-                {
-                    timer.In(3, () => OnPlayerConnected(player));
-                    return;
-                }
+                timer.In(3, () => OnPlayerConnected(player));
+                return;
+            }
+            if (_hiddenOffline.Contains(player))
+            {
+                _hiddenOffline.Remove(player);
+                Disappear(player);
+            }
+            if (HasPerm(player.UserIDString, permavanish))
+            {
                 Disappear(player);
             }
         }
