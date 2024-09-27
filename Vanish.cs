@@ -10,17 +10,17 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.5.2")]
+    [Info("Vanish", "Whispers88", "1.5.4")]
     [Description("Allows players with permission to become invisible")]
-    public class Vanish : RustPlugin
+    public class Vanish : CovalencePlugin
     {
+        static Vanish vanish;
         #region Configuration
         private readonly List<BasePlayer> _hiddenPlayers = new List<BasePlayer>();
         private readonly List<BasePlayer> _hiddenOffline = new List<BasePlayer>();
         private static List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage" };
         private static readonly DamageTypeList _EmptyDmgList = new DamageTypeList();
         CuiElementContainer cachedVanishUI = null;
-        CuiElementContainer cachedVanishColliderUI = null;
 
         private Configuration config;
 
@@ -44,6 +44,12 @@ namespace Oxide.Plugins
             [JsonProperty("Turn off fly hack detection for players in vanish")]
             public bool AntiHack = true;
 
+            [JsonProperty("Disable metabolism in vanish")]
+            public bool Metabolism = true;
+
+            [JsonProperty("Reset hydration and health on un-vanishing (resets to pre-vanished state)")]
+            public bool MetabolismReset = true;
+
             [JsonProperty("Enable vanishing and reappearing sound effects")]
             public bool EnableSound = true;
 
@@ -64,9 +70,6 @@ namespace Oxide.Plugins
 
             [JsonProperty("Icon URL (.png or .jpg)")]
             public string ImageUrlIcon = "http://i.imgur.com/Gr5G3YI.png";
-
-            [JsonProperty("Collider Toggle Icon URL (.png or .jpg)")]
-            public string ImageUrlColliderIcon = "https://i.imgur.com/9pLtRiI.png";
 
             [JsonProperty("Image Color")]
             public string ImageColor = "1 1 1 0.3";
@@ -97,20 +100,20 @@ namespace Oxide.Plugins
 
                 if (!config.ToDictionary().Keys.SequenceEqual(Config.ToDictionary(x => x.Key, x => x.Value).Keys))
                 {
-                    PrintToConsole("Configuration appears to be outdated; updating and saving");
+                    LogWarning("Configuration appears to be outdated; updating and saving");
                     SaveConfig();
                 }
             }
             catch
             {
-                PrintToConsole($"Configuration file {Name}.json is invalid; using defaults");
+                LogWarning($"Configuration file {Name}.json is invalid; using defaults");
                 LoadDefaultConfig();
             }
         }
 
         protected override void SaveConfig()
         {
-            PrintToConsole($"Configuration changes saved to {Name}.json");
+            LogWarning($"Configuration changes saved to {Name}.json");
             Config.WriteObject(config, true);
         }
 
@@ -123,13 +126,10 @@ namespace Oxide.Plugins
             lang.RegisterMessages(new Dictionary<string, string>
             {
                 ["VanishCommand"] = "vanish",
-                ["CollisionToggle"] = "collider",
                 ["Vanished"] = "Vanish: <color=orange> Enabled </color>",
                 ["Reappear"] = "Vanish: <color=orange> Disabled </color>",
                 ["NoPerms"] = "You do not have permission to do this",
                 ["PermanentVanish"] = "You are in a permanent vanish mode",
-                ["ColliderEnbabled"] = "Player Collider: <color=orange> Enabled </color>",
-                ["ColliderDisabled"] = "Player Collider: <color=orange> Disabled </color>"
 
             }, this);
         }
@@ -142,23 +142,20 @@ namespace Oxide.Plugins
         private const string permunlock = "vanish.unlock";
         private const string permdamage = "vanish.damage";
         private const string permavanish = "vanish.permanent";
-        private const string permcollision = "vanish.collision";
 
         private void Init()
         {
+            vanish = this;
             cachedVanishUI = CreateVanishUI();
-            cachedVanishColliderUI = CreateVanishColliderUI();
 
             // Register univeral chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
-            AddLocalizedCommand(nameof(CollisionToggle));
 
             // Register permissions for commands
             permission.RegisterPermission(permallow, this);
             permission.RegisterPermission(permunlock, this);
             permission.RegisterPermission(permdamage, this);
             permission.RegisterPermission(permavanish, this);
-            permission.RegisterPermission(permcollision, this);
 
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
@@ -215,50 +212,6 @@ namespace Oxide.Plugins
             }
             if (IsInvisible(player)) Reappear(player);
             else Disappear(player);
-
-        }
-
-        private HashSet<ulong> collideroff = new HashSet<ulong>();
-
-        private void CollisionToggle(IPlayer iplayer, string command, string[] args)
-        {
-            BasePlayer player = (BasePlayer)iplayer.Object;
-            if (player == null) return;
-            if (!IsInvisible(player)) return;
-            if (!HasPerm(player.UserIDString, permcollision))
-            {
-                if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
-                return;
-            }
-            VanishPositionUpdate t;
-            Collider col;
-            if (!player.gameObject.TryGetComponent<Collider>(out col)) return;
-            if (!col.enabled)
-            {
-                if (collideroff.Count == 0)
-                    Subscribe("OnEntityTakeDamage");
-
-                collideroff.Add(player.userID);
-                player.EnablePlayerCollider();
-
-                if (player.TryGetComponent<VanishPositionUpdate>(out t))
-                    t.collider = true;
-
-                CuiHelper.DestroyUi(player, "VanishColliderUI");
-                Message(player.IPlayer, "ColliderEnbabled");
-                return;
-            }
-
-            CuiHelper.AddUi(player, cachedVanishColliderUI);
-            player.DisablePlayerCollider();
-            collideroff.Remove(player.userID);
-            if (collideroff.Count == 0)
-                Unsubscribe("OnEntityTakeDamage");
-
-            if (player.TryGetComponent<VanishPositionUpdate>(out t))
-                t.collider = false;
-
-            Message(player.IPlayer, "ColliderDisabled");
         }
 
         private void Reappear(BasePlayer player)
@@ -271,19 +224,27 @@ namespace Oxide.Plugins
 
 
             //metabolism
-            player.metabolism.temperature.min = -100;
-            player.metabolism.temperature.max = 100;
-            player.metabolism.radiation_poison.max = 500;
-            player.metabolism.oxygen.min = 0;
-            player.metabolism.calories.min = 0;
-            player.metabolism.wetness.max = 1;
-            MetabolismValues value;
-            if(_storedMetabolism.TryGetValue(player, out value))
+            if (config.Metabolism)
             {
-                player.health = value.health;
-                player.metabolism.hydration.value = value.hydration;
+                player.metabolism.temperature.min = -100;
+                player.metabolism.temperature.max = 100;
+                player.metabolism.radiation_poison.max = 500;
+                player.metabolism.oxygen.min = 0;
+                player.metabolism.calories.min = 0;
+                player.metabolism.wetness.max = 1;
             }
-            _storedMetabolism.Remove(player);
+            if (config.MetabolismReset)
+            {
+                MetabolismValues value;
+
+                if (_storedMetabolism.TryGetValue(player, out value))
+                {
+                    player.health = value.health;
+                    player.metabolism.hydration.value = value.hydration;
+                }
+                _storedMetabolism.Remove(player);
+            }
+
             player.metabolism.isDirty = true;
             player.metabolism.SendChangesToClient();
 
@@ -313,14 +274,6 @@ namespace Oxide.Plugins
                 }
             }
             CuiHelper.DestroyUi(player, "VanishUI");
-            CuiHelper.DestroyUi(player, "VanishColliderUI");
-
-            collideroff.Remove(player.userID);
-
-            if (collideroff.Count == 0)
-            {
-                Unsubscribe("OnEntityTakeDamage");
-            }
 
             if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand("noclip");
 
@@ -330,7 +283,7 @@ namespace Oxide.Plugins
         private class MetabolismValues
         {
             public float health;
-            public float hydration; 
+            public float hydration;
         }
 
         private Dictionary<BasePlayer, MetabolismValues> _storedMetabolism = new Dictionary<BasePlayer, MetabolismValues>();
@@ -339,17 +292,22 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
             if (config.AntiHack) player.PauseFlyHackDetection(9000000f);
 
+            player.gameObject.AddComponent<VanishPositionUpdate>();
 
             //metabolism
-            player.metabolism.temperature.min = 20;
-            player.metabolism.temperature.max = 20;
-            player.metabolism.radiation_poison.max = 0;
-            player.metabolism.oxygen.min = 1;
-            player.metabolism.wetness.max = 0;
-            player.metabolism.calories.min = player.metabolism.calories.value;
-            player.metabolism.isDirty = true;
-            player.metabolism.SendChangesToClient();
-            _storedMetabolism[player] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value };
+            if (config.Metabolism)
+            {
+                player.metabolism.temperature.min = 20;
+                player.metabolism.temperature.max = 20;
+                player.metabolism.radiation_poison.max = 0;
+                player.metabolism.oxygen.min = 1;
+                player.metabolism.wetness.max = 0;
+                player.metabolism.calories.min = player.metabolism.calories.value;
+                player.metabolism.isDirty = true;
+                player.metabolism.SendChangesToClient();
+            }
+            if (config.MetabolismReset)
+                _storedMetabolism[player] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value };
 
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
@@ -357,8 +315,6 @@ namespace Oxide.Plugins
             player.syncPosition = false;
 
             player._limitedNetworking = true;
-
-            player.gameObject.AddComponent<VanishPositionUpdate>();
 
             //Mute Player Effects
             player.fallDamageEffect = new GameObjectRef();
@@ -384,7 +340,6 @@ namespace Oxide.Plugins
             if (config.EnableGUI)
             {
                 CuiHelper.AddUi(player, cachedVanishUI);
-                CuiHelper.AddUi(player, cachedVanishColliderUI);
             }
 
             if (config.EnableNotifications) Message(player.IPlayer, "Vanished");
@@ -460,7 +415,6 @@ namespace Oxide.Plugins
         #endregion Hooks
 
         #region GUI
-
         private CuiElementContainer CreateVanishUI()
         {
             CuiElementContainer elements = new CuiElementContainer();
@@ -481,26 +435,6 @@ namespace Oxide.Plugins
             return elements;
         }
 
-        private CuiElementContainer CreateVanishColliderUI()
-        {
-            CuiElementContainer elements = new CuiElementContainer();
-            string panel = elements.Add(new CuiPanel
-            {
-                Image = { Color = "0.5 0.5 0.5 0.0" },
-                RectTransform = { AnchorMin = config.ImageAnchorMin, AnchorMax = config.ImageAnchorMax }
-            }, "Hud", "VanishColliderUI");
-            elements.Add(new CuiElement
-            {
-                Parent = panel,
-                Components =
-                {
-                    new CuiRawImageComponent {Color = config.ImageColor, Url = config.ImageUrlColliderIcon},
-                    new CuiRectTransformComponent {AnchorMin = "0 0", AnchorMax = "1 1"}
-                }
-            });
-            return elements;
-        }
-
         #endregion GUI
 
         #region Monobehaviour
@@ -508,11 +442,19 @@ namespace Oxide.Plugins
         {
             private BasePlayer player;
             public bool collider;
+            GameObject child;
+            SphereCollider col;
             private void Awake()
             {
                 player = GetComponent<BasePlayer>();
                 InvokeRepeating("UpdatePos", 1f, 5f);
                 player.transform.localScale = Vector3.zero;
+                child = gameObject.CreateChild();
+                col = child.AddComponent<SphereCollider>();
+                child.layer = (int)Layer.Reserved1;
+                child.transform.localScale = Vector3.zero;
+                col.isTrigger = true;
+                BaseEntity.Query.Server.RemovePlayer(player);
             }
 
             private void UpdatePos()
@@ -521,11 +463,29 @@ namespace Oxide.Plugins
                     player.net.UpdateGroups(player.transform.position);
                 //until a collider hook is added
                 if (player.playerCollider.enabled)
-                    CuiHelper.DestroyUi(player, "VanishColliderUI");
+                    player.DisablePlayerCollider();
                 player.transform.localScale = Vector3.zero;
             }
+
+            void OnTriggerEnter(Collider col)
+            {
+                TriggerParent triggerParent = col.GetComponentInParent<TriggerParent>();
+                if (triggerParent == null) return;
+                triggerParent.OnEntityEnter(player);
+            }
+
+            void OnTriggerExit(Collider col)
+            {
+                TriggerParent triggerParent = col.GetComponentInParent<TriggerParent>();
+                if (triggerParent == null) return;
+                triggerParent.OnEntityLeave(player);
+            }
+
             private void OnDestroy()
             {
+                Destroy(col);
+                Destroy(child);
+                BaseEntity.Query.Server.AddPlayer(player);
                 player.transform.localScale = new Vector3(1, 1, 1);
                 CancelInvoke();
                 player = null;
