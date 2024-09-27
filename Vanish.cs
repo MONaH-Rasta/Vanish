@@ -10,16 +10,17 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.8")]
+    [Info("Vanish", "Whispers88", "1.5.0")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
         #region Configuration
         private readonly List<BasePlayer> _hiddenPlayers = new List<BasePlayer>();
         private readonly List<BasePlayer> _hiddenOffline = new List<BasePlayer>();
-        private static List<string> _registeredhooks = new List<string> { "OnNpcTarget", "CanBeTargeted", "CanHelicopterTarget", "CanHelicopterStrafeTarget", "CanBradleyApcTarget", "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerDisconnected" };
+        private static List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage" };
         private static readonly DamageTypeList _EmptyDmgList = new DamageTypeList();
         CuiElementContainer cachedVanishUI = null;
+        CuiElementContainer cachedVanishColliderUI = null;
 
         private Configuration config;
 
@@ -28,14 +29,20 @@ namespace Oxide.Plugins
             [JsonProperty("NoClip on Vanish (runs noclip command)")]
             public bool NoClipOnVanish = true;
 
+            [JsonProperty("Use OnEntityTakeDamage hook (Set to true to enable use of vanish.damage perm. Set to false for better performance)")]
+            public bool UseOnEntityTakeDamage = false;
+
+            [JsonProperty("Use CanUseLockedEntity hook (Allows vanished players with the perm vanish.unlock to bypass locks. Set to false for better performance)")]
+            public bool UseCanUseLockedEntity = true;
+
             [JsonProperty("Hide an invisible players body under the terrain after disconnect")]
-            public bool HideOnDisconnect = false;
+            public bool HideOnDisconnect = true;
 
             [JsonProperty("If a player was vanished on disconnection keep them vanished on reconnect")]
             public bool HideOnReconnect = true;
 
             [JsonProperty("Turn off fly hack detection for players in vanish")]
-            public bool AntiFlyHack = true;
+            public bool AntiHack = true;
 
             [JsonProperty("Enable vanishing and reappearing sound effects")]
             public bool EnableSound = true;
@@ -57,6 +64,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Icon URL (.png or .jpg)")]
             public string ImageUrlIcon = "http://i.imgur.com/Gr5G3YI.png";
+
+            [JsonProperty("Collider Toggle Icon URL (.png or .jpg)")]
+            public string ImageUrlColliderIcon = "https://i.imgur.com/9pLtRiI.png";
 
             [JsonProperty("Image Color")]
             public string ImageColor = "1 1 1 0.3";
@@ -137,6 +147,7 @@ namespace Oxide.Plugins
         private void Init()
         {
             cachedVanishUI = CreateVanishUI();
+            cachedVanishColliderUI = CreateVanishColliderUI();
 
             // Register univeral chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
@@ -148,24 +159,50 @@ namespace Oxide.Plugins
             permission.RegisterPermission(permdamage, this);
             permission.RegisterPermission(permavanish, this);
             permission.RegisterPermission(permcollision, this);
+
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
 
-            BasePlayer.activePlayerList.Where(i => HasPerm(i.UserIDString, permavanish) && !IsInvisible(i)).ToList().ForEach(j => Disappear(j));
+            if (!config.UseOnEntityTakeDamage)
+            {
+                _registeredhooks.Remove("OnEntityTakeDamage");
+            }
+
+            if (!config.UseCanUseLockedEntity)
+            {
+                _registeredhooks.Remove("CanUseLockedEntity");
+            }
+
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                if (!HasPerm(player.UserIDString, permavanish) || IsInvisible(player)) continue;
+                Disappear(player);
+            }
         }
 
         private void Unload()
         {
-            _hiddenPlayers.Where(i => i != null).ToList().ForEach(j => Reappear(j));
+            foreach (var player in _hiddenPlayers.ToList())
+            {
+                if (player == null) continue;
+                Reappear(player);
+            }
+
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                VanishPositionUpdate t;
+                if (!player.TryGetComponent<VanishPositionUpdate>(out t)) continue;
+                UnityEngine.Object.Destroy(t);
+            }
         }
 
         #endregion Initialization
 
         #region Commands
-
         private void VanishCommand(IPlayer iplayer, string command, string[] args)
         {
-            var player = (BasePlayer)iplayer.Object;
+            BasePlayer player = (BasePlayer)iplayer.Object;
+            if (player == null) return;
             if (!HasPerm(player.UserIDString, permallow))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
@@ -181,37 +218,70 @@ namespace Oxide.Plugins
 
         }
 
+        private HashSet<ulong> collideroff = new HashSet<ulong>();
+
         private void CollisionToggle(IPlayer iplayer, string command, string[] args)
         {
-            var player = (BasePlayer)iplayer.Object;
+            BasePlayer player = (BasePlayer)iplayer.Object;
+            if (player == null) return;
             if (!IsInvisible(player)) return;
             if (!HasPerm(player.UserIDString, permcollision))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
             }
-            var col = player.gameObject.GetComponent<Collider>();
+            VanishPositionUpdate t;
+            Collider col;
+            if (!player.gameObject.TryGetComponent<Collider>(out col)) return;
             if (!col.enabled)
             {
+                if (collideroff.Count == 0)
+                    Subscribe("OnEntityTakeDamage");
+
+                collideroff.Add(player.userID);
                 player.EnablePlayerCollider();
+
+                if (player.TryGetComponent<VanishPositionUpdate>(out t))
+                    t.collider = true;
+
+                CuiHelper.DestroyUi(player, "VanishColliderUI");
                 Message(player.IPlayer, "ColliderEnbabled");
                 return;
             }
+
+            CuiHelper.AddUi(player, cachedVanishColliderUI);
             player.DisablePlayerCollider();
+            collideroff.Remove(player.userID);
+            if (collideroff.Count == 0)
+                Unsubscribe("OnEntityTakeDamage");
+
+            if (player.TryGetComponent<VanishPositionUpdate>(out t))
+                t.collider = false;
+
             Message(player.IPlayer, "ColliderDisabled");
         }
 
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
-            if (config.AntiFlyHack) player.ResetAntiHack();
+            if (config.AntiHack) player.ResetAntiHack();
+
+            player.syncPosition = true;
+            UnityEngine.Object.Destroy(player.GetComponent<VanishPositionUpdate>());
+
+            player.metabolism.Reset();
+
             player._limitedNetworking = false;
-            player.EnablePlayerCollider();
+
+            player.playerCollider.enabled = true;
+            _hiddenPlayers.Remove(player);
+            player.UpdateNetworkGroup();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
+
+            //Un-Mute Player Effects
             player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
             player.fallDamageEffect.guid = "ca14ed027d5924003b1c5d9e523a5fce";
-            _hiddenPlayers.Remove(player);
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
@@ -226,8 +296,15 @@ namespace Oxide.Plugins
                     SendEffect(player, config.ReappearSoundEffect);
                 }
             }
-
             CuiHelper.DestroyUi(player, "VanishUI");
+            CuiHelper.DestroyUi(player, "VanishColliderUI");
+
+            collideroff.Remove(player.userID);
+
+            if (collideroff.Count == 0)
+            {
+                Unsubscribe("OnEntityTakeDamage");
+            }
 
             if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand("noclip");
 
@@ -237,17 +314,24 @@ namespace Oxide.Plugins
         private void Disappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
+            if (config.AntiHack) player.PauseFlyHackDetection(9000000f);
 
-            if (config.AntiFlyHack) player.PauseFlyHackDetection();
+            player.CancelInvoke("MetabolismUpdate");
+
+            var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
+            player.OnNetworkSubscribersLeave(connections);
+            player.DisablePlayerCollider();
+            player.syncPosition = false;
+
+            player._limitedNetworking = true;
+
+            player.gameObject.AddComponent<VanishPositionUpdate>();
+
             //Mute Player Effects
             player.fallDamageEffect = new GameObjectRef();
             player.drownEffect = new GameObjectRef();
-            AntiHack.ShouldIgnore(player);
+
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
-            player._limitedNetworking = true;
-            player.DisablePlayerCollider();
-            var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
-            player.OnNetworkSubscribersLeave(connections);
             _hiddenPlayers.Add(player);
 
             if (config.EnableSound)
@@ -261,9 +345,14 @@ namespace Oxide.Plugins
                     SendEffect(player, config.VanishSoundEffect);
                 }
             }
+
             if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted) player.SendConsoleCommand("noclip");
 
-            if (config.EnableGUI) CuiHelper.AddUi(player, cachedVanishUI);
+            if (config.EnableGUI)
+            {
+                CuiHelper.AddUi(player, cachedVanishUI);
+                CuiHelper.AddUi(player, cachedVanishColliderUI);
+            }
 
             if (config.EnableNotifications) Message(player.IPlayer, "Vanished");
         }
@@ -273,16 +362,12 @@ namespace Oxide.Plugins
         #region Hooks
         private void OnPlayerConnected(BasePlayer player)
         {
-            if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
-            {
-                timer.In(3, () => OnPlayerConnected(player));
-                return;
-            }
             if (_hiddenOffline.Contains(player))
             {
                 _hiddenOffline.Remove(player);
                 if (HasPerm(player.UserIDString, permallow))
                     Disappear(player);
+                return;
             }
             if (HasPerm(player.UserIDString, permavanish))
             {
@@ -290,20 +375,16 @@ namespace Oxide.Plugins
             }
         }
 
-        private object OnNpcTarget(BaseEntity entity, BasePlayer target) => IsInvisible(target) ? (object)true : null;
-        private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player) ? (object)false : null;
-        private object CanHelicopterTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
-        private object CanHelicopterStrafeTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
-        private object CanBradleyApcTarget(BradleyAPC apc, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanUseLockedEntity(BasePlayer player, BaseLock baseLock)
         {
-            if (IsInvisible(player))
+            if (player.limitNetworking)
             {
                 if (HasPerm(player.UserIDString, permunlock)) return true;
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
             }
             return null;
         }
+
         private object OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
         {
             var attacker = info?.InitiatorPlayer;
@@ -324,22 +405,24 @@ namespace Oxide.Plugins
         {
             if (!IsInvisible(player)) return;
 
-            player._limitedNetworking = false;
-            player.EnablePlayerCollider();
-            player.SendNetworkUpdate();
-            player.GetHeldEntity()?.SendNetworkUpdate();
-            _hiddenPlayers.Remove(player);
+            Reappear(player);
+
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
+
             if (config.HideOnDisconnect)
             {
                 var pos = player.transform.position;
                 var underTerrainPos = new Vector3(pos.x, TerrainMeta.HeightMap.GetHeight(pos) - 5, pos.z);
                 player.Teleport(underTerrainPos);
                 player.DisablePlayerCollider();
+                player.limitNetworking = true;
             }
+
             if (config.HideOnReconnect)
                 _hiddenOffline.Add(player);
+
             CuiHelper.DestroyUi(player, "VanishUI");
+            CuiHelper.DestroyUi(player, "VanishColliderUI");
         }
         #endregion Hooks
 
@@ -365,7 +448,58 @@ namespace Oxide.Plugins
             return elements;
         }
 
+        private CuiElementContainer CreateVanishColliderUI()
+        {
+            CuiElementContainer elements = new CuiElementContainer();
+            string panel = elements.Add(new CuiPanel
+            {
+                Image = { Color = "0.5 0.5 0.5 0.0" },
+                RectTransform = { AnchorMin = config.ImageAnchorMin, AnchorMax = config.ImageAnchorMax }
+            }, "Hud", "VanishColliderUI");
+            elements.Add(new CuiElement
+            {
+                Parent = panel,
+                Components =
+                {
+                    new CuiRawImageComponent {Color = config.ImageColor, Url = config.ImageUrlColliderIcon},
+                    new CuiRectTransformComponent {AnchorMin = "0 0", AnchorMax = "1 1"}
+                }
+            });
+            return elements;
+        }
+
         #endregion GUI
+
+        #region Monobehaviour
+        public class VanishPositionUpdate : FacepunchBehaviour
+        {
+            private BasePlayer player;
+            public bool collider;
+            private void Awake()
+            {
+                player = GetComponent<BasePlayer>();
+                InvokeRepeating("UpdatePos", 1f, 5f);
+                player.transform.localScale = Vector3.zero;
+            }
+
+            private void UpdatePos()
+            {
+                using (TimeWarning.New("UpdateVanishGroup"))
+                    player.net.UpdateGroups(player.transform.position);
+                //until a collider hook is added
+                if (player.playerCollider.enabled)
+                    CuiHelper.DestroyUi(player, "VanishColliderUI");
+                player.transform.localScale = Vector3.zero;
+            }
+            private void OnDestroy()
+            {
+                player.transform.localScale = new Vector3(1, 1, 1);
+                CancelInvoke();
+                player = null;
+            }
+        }
+
+        #endregion Monobehaviour
 
         #region Helpers
 
@@ -387,10 +521,7 @@ namespace Oxide.Plugins
 
         private bool HasPerm(string id, string perm) => permission.UserHasPermission(id, perm);
 
-        private string GetLang(string langKey, string playerId = null, params object[] args)
-        {
-            return string.Format(lang.GetMessage(langKey, this, playerId), args);
-        }
+        private string GetLang(string langKey, string playerId = null, params object[] args) => string.Format(lang.GetMessage(langKey, this, playerId), args);
 
         private void Message(IPlayer player, string langKey, params object[] args)
         {
