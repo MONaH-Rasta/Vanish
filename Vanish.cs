@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.0.2")]
+    [Info("Vanish", "Whispers88", "1.0.3")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -177,7 +177,6 @@ namespace Oxide.Plugins
                 CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
             }
 
-
             Message(player.IPlayer, "Reappear");
         }
 
@@ -220,7 +219,7 @@ namespace Oxide.Plugins
         #endregion Commands
 
         #region Hooks
-        object OnNpcTarget(BaseEntity npc, BasePlayer player) => IsInvisible(player) ? (object)false : null;
+        private object OnNpcTarget(BaseEntity npc, BasePlayer player) => IsInvisible(player) ? (object)true : null;
         private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player?.ToPlayer()) ? (object)false : null;
         private object CanHelicopterTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanBradleyApcTarget(BradleyAPC apc, BasePlayer player) => IsInvisible(player) ? (object)false : null;
