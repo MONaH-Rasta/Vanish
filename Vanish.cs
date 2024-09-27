@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.7")]
+    [Info("Vanish", "Whispers88", "1.3.8")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
@@ -193,11 +193,11 @@ namespace Oxide.Plugins
             var col = player.gameObject.GetComponent<Collider>();
             if (!col.enabled)
             {
-                player.UpdatePlayerCollider(true);
+                player.EnablePlayerCollider();
                 Message(player.IPlayer, "ColliderEnbabled");
                 return;
             }
-            player.UpdatePlayerCollider(false);
+            player.DisablePlayerCollider();
             Message(player.IPlayer, "ColliderDisabled");
         }
 
@@ -206,7 +206,7 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
             if (config.AntiFlyHack) player.ResetAntiHack();
             player._limitedNetworking = false;
-            player.UpdatePlayerCollider(true);
+            player.EnablePlayerCollider();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
@@ -245,7 +245,7 @@ namespace Oxide.Plugins
             AntiHack.ShouldIgnore(player);
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
             player._limitedNetworking = true;
-            player.UpdatePlayerCollider(false);
+            player.DisablePlayerCollider();
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
             _hiddenPlayers.Add(player);
@@ -324,20 +324,21 @@ namespace Oxide.Plugins
         {
             if (!IsInvisible(player)) return;
 
+            player._limitedNetworking = false;
+            player.EnablePlayerCollider();
+            player.SendNetworkUpdate();
+            player.GetHeldEntity()?.SendNetworkUpdate();
+            _hiddenPlayers.Remove(player);
+            if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
             if (config.HideOnDisconnect)
             {
                 var pos = player.transform.position;
                 var underTerrainPos = new Vector3(pos.x, TerrainMeta.HeightMap.GetHeight(pos) - 5, pos.z);
                 player.Teleport(underTerrainPos);
+                player.DisablePlayerCollider();
             }
-
-            player._limitedNetworking = false;
-            player.UpdatePlayerCollider(false);
-            player.SendNetworkUpdate();
-            player.GetHeldEntity()?.SendNetworkUpdate();
-            _hiddenPlayers.Remove(player);
-            if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
-            if (config.HideOnReconnect) _hiddenOffline.Add(player);
+            if (config.HideOnReconnect)
+                _hiddenOffline.Add(player);
             CuiHelper.DestroyUi(player, "VanishUI");
         }
         #endregion Hooks
