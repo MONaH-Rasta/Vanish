@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.5.1")]
+    [Info("Vanish", "Whispers88", "1.5.2")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
@@ -275,7 +275,17 @@ namespace Oxide.Plugins
             player.metabolism.temperature.max = 100;
             player.metabolism.radiation_poison.max = 500;
             player.metabolism.oxygen.min = 0;
-            player.metabolism.Reset();
+            player.metabolism.calories.min = 0;
+            player.metabolism.wetness.max = 1;
+            MetabolismValues value;
+            if(_storedMetabolism.TryGetValue(player, out value))
+            {
+                player.health = value.health;
+                player.metabolism.hydration.value = value.hydration;
+            }
+            _storedMetabolism.Remove(player);
+            player.metabolism.isDirty = true;
+            player.metabolism.SendChangesToClient();
 
             player._limitedNetworking = false;
 
@@ -317,6 +327,13 @@ namespace Oxide.Plugins
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
+        private class MetabolismValues
+        {
+            public float health;
+            public float hydration; 
+        }
+
+        private Dictionary<BasePlayer, MetabolismValues> _storedMetabolism = new Dictionary<BasePlayer, MetabolismValues>();
         private void Disappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
@@ -324,11 +341,15 @@ namespace Oxide.Plugins
 
 
             //metabolism
-            player.CancelInvoke("MetabolismUpdate");
             player.metabolism.temperature.min = 20;
             player.metabolism.temperature.max = 20;
             player.metabolism.radiation_poison.max = 0;
             player.metabolism.oxygen.min = 1;
+            player.metabolism.wetness.max = 0;
+            player.metabolism.calories.min = player.metabolism.calories.value;
+            player.metabolism.isDirty = true;
+            player.metabolism.SendChangesToClient();
+            _storedMetabolism[player] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value };
 
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
