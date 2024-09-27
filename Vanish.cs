@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.3")]
+    [Info("Vanish", "nivex", "0.7.4")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -345,6 +345,7 @@ namespace Oxide.Plugins
         {
             public BasePlayer Player;
             public bool IsInvisible;
+            public Timer groupSwitchTimer;
         }
 
         [OnlinePlayers]
@@ -476,9 +477,12 @@ namespace Oxide.Plugins
                 return;
             }
 
-            if (onlinePlayers[basePlayer] == null)
+            OnlinePlayer player;
+
+            if (!onlinePlayers.TryGetValue(basePlayer, out player))
             {
-                onlinePlayers[basePlayer] = new OnlinePlayer();
+                player = new OnlinePlayer();
+                onlinePlayers[basePlayer] = player;
             }
 
             List<Connection> connections = new List<Connection>();
@@ -517,7 +521,12 @@ namespace Oxide.Plugins
 
             basePlayer.UpdatePlayerCollider(false);
 
-            onlinePlayers[basePlayer].IsInvisible = true;
+            player.IsInvisible = true;
+            player.groupSwitchTimer?.Destroy();
+            player.groupSwitchTimer = timer.Every(5f, () =>
+            {
+                basePlayer?.UpdateNetworkGroup();
+            });
 
             if (basePlayer.GetComponent<WeaponBlock>() == null && basePlayer.IPlayer.HasPermission(permAbilitiesHideWeapons))
             {
@@ -780,6 +789,7 @@ namespace Oxide.Plugins
             if (onlinePlayers[basePlayer] != null)
             {
                 onlinePlayers[basePlayer].IsInvisible = false;
+                onlinePlayers[basePlayer].groupSwitchTimer?.Destroy();
 
                 if (basePlayer.GetComponent<WeaponBlock>() != null)
                 {
@@ -988,6 +998,11 @@ namespace Oxide.Plugins
                     if (guiInfo.TryGetValue(basePlayer.userID, out gui))
                     {
                         CuiHelper.DestroyUi(basePlayer, gui);
+                    }
+                    OnlinePlayer player;
+                    if (onlinePlayers.TryGetValue(basePlayer, out player))
+                    {
+                        Reappear(basePlayer);
                     }
                 }
 
