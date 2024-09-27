@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.0")]
+    [Info("Vanish", "nivex", "0.7.1")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -513,11 +513,6 @@ namespace Oxide.Plugins
 
             basePlayer.UpdatePlayerCollider(false);
 
-            if (config.ShowGuiIcon)
-            {
-                VanishGui(basePlayer);
-            }
-
             if (onlinePlayers[basePlayer] != null)
             {
                 onlinePlayers[basePlayer].IsInvisible = true;
@@ -532,6 +527,12 @@ namespace Oxide.Plugins
                     basePlayer.gameObject.AddComponent<Runner>();
                 }
             }
+
+            if (config.ShowGuiIcon)
+            {
+                VanishGui(basePlayer);
+            }
+
             Message(basePlayer.IPlayer, "VanishEnabled");
 
             if (config.VanishTimeout > 0f) timer.Once(config.VanishTimeout, () =>
@@ -630,6 +631,11 @@ namespace Oxide.Plugins
         // Disappear when waking up if vanished
         private void OnPlayerSleepEnded(BasePlayer basePlayer)
         {
+            if (basePlayer == null || basePlayer.net == null)
+            {
+                return;
+            }
+
             if (IsInvisible(basePlayer))
             {
                 if (basePlayer.IPlayer.HasPermission(permUse))
