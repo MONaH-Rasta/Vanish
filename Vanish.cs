@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.0.3")]
+    [Info("Vanish", "Whispers88", "1.0.5")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -33,6 +33,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Enable vanishing and reappearing sound effects")]
             public bool EnableSound = true;
+
+            [JsonProperty("Enable chat notifications")]
+            public bool EnableNotifications = true;
 
             [JsonProperty("Sound effect to use when vanishing")]
             public string VanishSoundEffect = "assets/prefabs/npc/patrol helicopter/effects/rocket_fire.prefab";
@@ -128,13 +131,13 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            for(int i = _hiddenPlayers.Count -1; i >= 0; i--)
+            for (int i = _hiddenPlayers.Count - 1; i >= 0; i--)
             {
                 var player = _hiddenPlayers[i];
-                if(player != null) Reappear(player);
+                if (player != null) Reappear(player);
             }
 
-            foreach(var key in GuiGuids.Keys)
+            foreach (var key in GuiGuids.Keys)
             {
                 var player = BasePlayer.FindByID(key);
                 if (player != null) CuiHelper.DestroyUi(player, GuiGuids[key]);
@@ -151,7 +154,7 @@ namespace Oxide.Plugins
         private void VanishCommand(IPlayer iplayer, string command, string[] args)
         {
             var player = (BasePlayer)iplayer.Object;
-            if (!HasPerm(player.UserIDString, permallow))
+            if (!HasPerm(player.UserIDString, permallow) && !player.IsAdmin)
                 return;
             if (IsInvisible(player)) Reappear(player);
             else Disappear(player);
@@ -162,22 +165,16 @@ namespace Oxide.Plugins
             player._limitedNetworking = false;
             player.UpdatePlayerCollider(true);
             player.SendNetworkUpdate();
-            player.GetHeldEntity().SendNetworkUpdate();
+            player.GetHeldEntity()?.SendNetworkUpdate();
             _hiddenPlayers.Remove(player);
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
-            if (config.EnableSound)
-            {
-                SendEffect(player, config.ReappearSoundEffect);
-            }
+            if (config.EnableSound) SendEffect(player, config.ReappearSoundEffect);
 
-            if(GuiGuids.ContainsKey(player.userID))
-            {
-                CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
-            }
+            if (GuiGuids.ContainsKey(player.userID)) CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
 
-            Message(player.IPlayer, "Reappear");
+            if(config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
         private void Disappear(BasePlayer player)
@@ -186,6 +183,7 @@ namespace Oxide.Plugins
             player._limitedNetworking = true;
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
+            
             if (player.children != null)
             {
                 var childs = Pool.GetList<BaseEntity>();
@@ -206,10 +204,7 @@ namespace Oxide.Plugins
 
             _hiddenPlayers.Add(player);
 
-            if(config.EnableSound)
-            {
-                SendEffect(player, config.VanishSoundEffect);
-            }
+            if (config.EnableSound) SendEffect(player, config.VanishSoundEffect);
 
             if (config.EnableGUI) VanishGui(player);
 
@@ -265,6 +260,7 @@ namespace Oxide.Plugins
                     var underTerrainPos = new Vector3(pos.x, TerrainMeta.HeightMap.GetHeight(pos) - 10, pos.z);
                     player.Teleport(underTerrainPos);
                 }
+
                 player.syncPosition = true;
                 player._limitedNetworking = false;
 
