@@ -1,4 +1,3 @@
-using Facepunch;
 using Network;
 using Newtonsoft.Json;
 using Oxide.Core.Libraries.Covalence;
@@ -10,14 +9,14 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.0.5")]
+    [Info("Vanish", "Whispers88", "1.0.6")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
 
         #region Configuration
         private readonly List<BasePlayer> _hiddenPlayers = new List<BasePlayer>();
-        private static List<string> _registeredhooks = new List<string> { "OnNpcTarget", "CanBeTargeted", "CanHelicopterTarget", "CanBradleyApcTarget", "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerDisconnected" };
+        private static List<string> _registeredhooks = new List<string> { "OnNpcTarget", "CanBeTargeted", "CanHelicopterTarget", "CanHelicopterStrafeTarget", "CanBradleyApcTarget", "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerDisconnected" };
         private static readonly DamageTypeList _EmptyDmgList = new DamageTypeList();
         private static readonly Dictionary<ulong, string> GuiGuids = new Dictionary<ulong, string>();
 
@@ -105,7 +104,9 @@ namespace Oxide.Plugins
             {
                 ["VanishCommand"] = "vanish",
                 ["Vanished"] = "Vanish: <color=orange> Enabled </color>",
-                ["Reappear"] = "Vanish: <color=orange> Disabled </color>"
+                ["Reappear"] = "Vanish: <color=orange> Disabled </color>",
+                ["NoPerms"] = "You do not have permission to do this"
+
             }, this);
         }
 
@@ -115,6 +116,7 @@ namespace Oxide.Plugins
 
         private const string permallow = "vanish.allow";
         private const string permunlock = "vanish.unlock";
+        private const string permdamage = "vanish.damage";
 
         private void Init()
         {
@@ -124,9 +126,12 @@ namespace Oxide.Plugins
             // Register permissions for commands
             permission.RegisterPermission(permallow, this);
             permission.RegisterPermission(permunlock, this);
+            permission.RegisterPermission(permdamage, this);
 
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
+
+            RenamePerms("vanish.use", "vanish.allow");
         }
 
         private void Unload()
@@ -155,7 +160,10 @@ namespace Oxide.Plugins
         {
             var player = (BasePlayer)iplayer.Object;
             if (!HasPerm(player.UserIDString, permallow) && !player.IsAdmin)
+            {
+                if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
+            }
             if (IsInvisible(player)) Reappear(player);
             else Disappear(player);
         }
@@ -174,7 +182,7 @@ namespace Oxide.Plugins
 
             if (GuiGuids.ContainsKey(player.userID)) CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
 
-            if(config.EnableNotifications) Message(player.IPlayer, "Reappear");
+            if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
         private void Disappear(BasePlayer player)
@@ -183,22 +191,6 @@ namespace Oxide.Plugins
             player._limitedNetworking = true;
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
-            
-            if (player.children != null)
-            {
-                var childs = Pool.GetList<BaseEntity>();
-                try
-                {
-                    foreach (var child in player.children)
-                        GetChildren(child, childs);
-                    foreach (var childent in childs)
-                        childent.OnNetworkSubscribersLeave(connections);
-                }
-                finally
-                {
-                    Pool.Free(ref childs);
-                }
-            }
 
             if (config.DisablePlayerCollider) player.UpdatePlayerCollider(false);
 
@@ -208,7 +200,7 @@ namespace Oxide.Plugins
 
             if (config.EnableGUI) VanishGui(player);
 
-            Message(player.IPlayer, "Vanished");
+            if(config.EnableNotifications) Message(player.IPlayer, "Vanished");
         }
 
         #endregion Commands
@@ -217,21 +209,14 @@ namespace Oxide.Plugins
         private object OnNpcTarget(BaseEntity npc, BasePlayer player) => IsInvisible(player) ? (object)true : null;
         private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player?.ToPlayer()) ? (object)false : null;
         private object CanHelicopterTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
+        private object CanHelicopterStrafeTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanBradleyApcTarget(BradleyAPC apc, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanUseLockedEntity(BasePlayer player, BaseLock baseLock)
         {
-            if (IsInvisible(player) && HasPerm(player.UserIDString, permunlock))
+            if (IsInvisible(player))
             {
-                return true;
-            }
-
-            CodeLock codeLock = baseLock as CodeLock;
-            if (codeLock != null)
-            {
-                if (!codeLock.whitelistPlayers.Contains(player.userID) && !codeLock.guestPlayers.Contains(player.userID))
-                {
-                    return false;
-                }
+                if (HasPerm(player.UserIDString, permunlock)) return true;
+                if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
             }
             return null;
         }
@@ -240,6 +225,7 @@ namespace Oxide.Plugins
             var attacker = info?.InitiatorPlayer;
             var victim = entity?.ToPlayer();
             if (!IsInvisible(victim) && !IsInvisible(attacker)) return null;
+            if (IsInvisible(attacker) && HasPerm(attacker.UserIDString, permdamage)) return null;
             if (info != null)
             {
                 info.damageTypes = _EmptyDmgList;
@@ -261,9 +247,16 @@ namespace Oxide.Plugins
                     player.Teleport(underTerrainPos);
                 }
 
-                player.syncPosition = true;
                 player._limitedNetworking = false;
-
+                player.UpdatePlayerCollider(true);
+                player.SendNetworkUpdate();
+                player.GetHeldEntity()?.SendNetworkUpdate();
+                _hiddenPlayers.Remove(player);
+                if (GuiGuids.ContainsKey(player.userID))
+                {
+                    CuiHelper.DestroyUi(player, GuiGuids[player.userID]);
+                    GuiGuids.Remove(player.userID);
+                }
                 if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
             }
         }
@@ -363,14 +356,48 @@ namespace Oxide.Plugins
             EffectNetwork.Send(effect, player.net.connection);
         }
 
-        private static void GetChildren(BaseEntity entity, List<BaseEntity> childslist)
+        private void RenamePerms(string oldPerm, string newPerm)
         {
-            if (entity == null) return;
-            if (!childslist.Contains(entity)) childslist.Add(entity);
-            if (entity.children == null) return;
-            foreach (var subchild in entity.children)
-                GetChildren(subchild, childslist);
+            int i = 0;
+            foreach (string group in permission.GetGroups())
+            {
+                if (permission.GroupHasPermission(group, oldPerm))
+                {
+                    permission.GrantGroupPermission(group, newPerm, null);
+                    permission.RevokeGroupPermission(group, oldPerm);
+                    i++;
+                }
+            }
+            Puts($"Found {i.ToString()} groups with the perm {oldPerm}");
+            if( i > 0 ) Puts("Granting new perms");
+
+            var users = new List<string>();
+            foreach (string player in permission.GetPermissionUsers(oldPerm))
+            {
+                string userId = player.Split('(')[0].Trim();
+                users.Add(userId);
+            }
+
+            Puts($"Found {users.Count.ToString()} users with the perm {oldPerm}");
+            if (users.Count > 0)
+            {
+                Puts("Removing old permission from players..");
+
+                foreach (string playerId in users)
+                {
+                    permission.RevokeUserPermission(playerId, oldPerm);
+                }
+                Puts("Removed permissions");
+                Puts("Granting new perms");
+                foreach (string playerId in users)
+                {
+                    rust.RunServerCommand($"oxide.grant user {playerId} {newPerm}");
+                }
+            }
+            Puts("Finished upgrading permissions");
         }
+    
+
         #endregion Helpers
 
         #region Public Helpers
