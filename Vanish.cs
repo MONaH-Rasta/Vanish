@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.6.6")]
+    [Info("Vanish", "Whispers88", "1.6.8")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -209,10 +209,9 @@ namespace Oxide.Plugins
             }
             //_hiddenOffline.AddRange(_hiddenPlayers);
             SaveData();
-
-            foreach (var playerid in _hiddenOffline.ToList())
+            for (int i = _hiddenPlayers.Count - 1; i >= 0; i--)
             {
-                BasePlayer player = BasePlayer.FindByID(playerid);
+                BasePlayer player = BasePlayer.FindByID(_hiddenOffline[i]);
                 if (player == null) continue;
                 Reappear(player);
             }
@@ -590,8 +589,8 @@ namespace Oxide.Plugins
 
             public void DestroyChildGO()
             {
-                if (child == null) return;
-                if (player.triggers != null)
+                CancelInvoke(UpdatePos);
+                if (player?.triggers != null)
                 {
                     for (int i = player.triggers.Count - 1; i >= 0; i--)
                     {
@@ -606,24 +605,26 @@ namespace Oxide.Plugins
                     Destroy(col);
                 if (child != null)
                     Destroy(child);
-                CancelInvoke(UpdatePos);
             }
 
             private void OnDestroy()
             {
-                player.Connection.active = true;
                 DestroyChildGO();
-                BaseEntity.Query.Server.AddPlayer(player);
-                player.lastAdminCheatTime = Time.realtimeSinceStartup;
-                player.transform.localScale = new Vector3(1, 1, 1);
+                if (player != null)
+                {
+                    player.Connection.active = true;
+                    BaseEntity.Query.Server.AddPlayer(player);
+                    player.lastAdminCheatTime = Time.realtimeSinceStartup;
+                    player.transform.localScale = new Vector3(1, 1, 1);
 
-                //Rest Workbench Level
-                player.cachedCraftLevel = 0f;
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, false);
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, false);
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench3, false);
-                player.nextCheckTime = Time.realtimeSinceStartup;
-                player = null;
+
+                    //Rest Workbench Level
+                    player.cachedCraftLevel = 0f;
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, false);
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, false);
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench3, false);
+                    player.nextCheckTime = Time.realtimeSinceStartup;
+                }
             }
 
         }
