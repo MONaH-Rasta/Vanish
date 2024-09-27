@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.1.0")]
+    [Info("Vanish", "Whispers88", "1.1.2")]
     [Description("Allows players with permission to become invisible. Credits to Nivex & Wulf")]
     public class Vanish : RustPlugin
     {
@@ -108,10 +108,13 @@ namespace Oxide.Plugins
             lang.RegisterMessages(new Dictionary<string, string>
             {
                 ["VanishCommand"] = "vanish",
+                ["CollisionToggle"] = "collider",
                 ["Vanished"] = "Vanish: <color=orange> Enabled </color>",
                 ["Reappear"] = "Vanish: <color=orange> Disabled </color>",
                 ["NoPerms"] = "You do not have permission to do this",
-                ["PermanentVanish"] = "You are in a permanent vanish mode"
+                ["PermanentVanish"] = "You are in a permanent vanish mode",
+                ["ColliderEnbabled"] = "Player Collider: <color=orange> Enabled </color>",
+                ["ColliderDisabled"] = "Player Collider: <color=orange> Disabled </color>"
 
             }, this);
         }
@@ -124,17 +127,20 @@ namespace Oxide.Plugins
         private const string permunlock = "vanish.unlock";
         private const string permdamage = "vanish.damage";
         private const string permavanish = "vanish.permanent";
+        private const string permcollision = "vanish.collsion";
 
         private void Init()
         {
             // Register univeral chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
+            AddLocalizedCommand(nameof(CollisionToggle));
 
             // Register permissions for commands
             permission.RegisterPermission(permallow, this);
             permission.RegisterPermission(permunlock, this);
             permission.RegisterPermission(permdamage, this);
             permission.RegisterPermission(permavanish, this);
+            permission.RegisterPermission(permcollision, this);
 
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
@@ -142,8 +148,8 @@ namespace Oxide.Plugins
             //Rename old permissions
             if (config.RenamePerms) RenamePerms("vanish.use", "vanish.allow");
 
-            foreach(var player in BasePlayer.activePlayerList)
-            {               
+            foreach (var player in BasePlayer.activePlayerList)
+            {
                 if (HasPerm(player.UserIDString, permavanish))
                 {
                     if (!IsInvisible(player)) Disappear(player);
@@ -182,7 +188,7 @@ namespace Oxide.Plugins
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
             }
-            if(HasPerm(player.UserIDString, permavanish))
+            if (HasPerm(player.UserIDString, permavanish))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "PermanentVanish");
                 return;
@@ -191,11 +197,32 @@ namespace Oxide.Plugins
             else Disappear(player);
         }
 
+        private void CollisionToggle(IPlayer iplayer, string command, string[] args)
+        {
+            var player = (BasePlayer)iplayer.Object;
+            if (!HasPerm(player.UserIDString, permcollision))
+            {
+                if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
+                return;
+            }
+            if (!IsInvisible(player)) return;
+            var col = player.gameObject.GetComponent<Collider>();
+            if(!col.enabled)
+            {
+                player.UpdatePlayerCollider(true);
+                Message(player.IPlayer, "ColliderEnbabled");
+                return;
+            }
+            player.UpdatePlayerCollider(false);
+            Message(player.IPlayer, "ColliderDisabled");
+        }
+
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
 
             player._limitedNetworking = false;
+            player.UpdatePlayerCollider(true);
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
@@ -221,6 +248,7 @@ namespace Oxide.Plugins
 
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
             player._limitedNetworking = true;
+            player.UpdatePlayerCollider(false);
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
 
@@ -236,14 +264,20 @@ namespace Oxide.Plugins
         #endregion Commands
 
         #region Hooks
-
-        private object OnNpcTarget(BaseEntity entity, BaseEntity target)
+        private void OnPlayerInit(BasePlayer player)
         {
-            BaseAnimalNPC animalnpc = entity as BaseAnimalNPC;
-            if (animalnpc != null) animalnpc.AiContext.EnemyPlayer = null;
-            if (IsInvisible(target?.ToPlayer())) return true;
-            return null;
+            if (HasPerm(player.UserIDString, permavanish) || _hiddenOffline.Contains(player))
+            {
+                if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
+                {
+                    timer.In(3, () => OnPlayerInit(player));
+                    return;
+                }
+                Disappear(player);
+            }
         }
+
+        private object OnNpcTarget(BaseEntity entity, BaseEntity target) => IsInvisible(target?.ToPlayer()) ? (object)true : null;
         private object CanBeTargeted(BasePlayer player, MonoBehaviour behaviour) => IsInvisible(player?.ToPlayer()) ? (object)false : null;
         private object CanHelicopterTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
         private object CanHelicopterStrafeTarget(PatrolHelicopterAI heli, BasePlayer player) => IsInvisible(player) ? (object)false : null;
@@ -297,11 +331,6 @@ namespace Oxide.Plugins
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
             if (config.HideOnReconnect) _hiddenOffline.Add(player);
 
-        }
-
-        private void OnPlayerSleepEnded(BasePlayer player)
-        {
-            if (HasPerm(player.UserIDString, permavanish) || _hiddenOffline.Contains(player))  Disappear(player);
         }
 
         #endregion Hooks
