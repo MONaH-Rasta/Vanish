@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.2")]
+    [Info("Vanish", "nivex", "0.7.3")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -497,6 +497,8 @@ namespace Oxide.Plugins
                 basePlayer.limitNetworking = true;
             }
 
+            basePlayer.syncPosition = false;
+
             HeldEntity heldEntity = basePlayer.GetHeldEntity();
             if (heldEntity != null)
             {
@@ -789,6 +791,7 @@ namespace Oxide.Plugins
                     GameObject.Destroy(basePlayer.GetComponent<Runner>());
                 }
             }
+            basePlayer.syncPosition = true;
             basePlayer.SendNetworkUpdate();
             basePlayer.limitNetworking = false;
 
