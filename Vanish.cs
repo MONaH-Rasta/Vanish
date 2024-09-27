@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.6")]
+    [Info("Vanish", "Whispers88", "1.3.7")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
@@ -193,11 +193,11 @@ namespace Oxide.Plugins
             var col = player.gameObject.GetComponent<Collider>();
             if (!col.enabled)
             {
-                player.EnablePlayerCollider();
+                player.UpdatePlayerCollider(true);
                 Message(player.IPlayer, "ColliderEnbabled");
                 return;
             }
-            player.DisablePlayerCollider();
+            player.UpdatePlayerCollider(false);
             Message(player.IPlayer, "ColliderDisabled");
         }
 
@@ -206,7 +206,7 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
             if (config.AntiFlyHack) player.ResetAntiHack();
             player._limitedNetworking = false;
-            player.EnablePlayerCollider();
+            player.UpdatePlayerCollider(true);
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             player.drownEffect.guid = "28ad47c8e6d313742a7a2740674a25b5";
@@ -245,7 +245,7 @@ namespace Oxide.Plugins
             AntiHack.ShouldIgnore(player);
             if (_hiddenPlayers.Count == 0) SubscribeToHooks();
             player._limitedNetworking = true;
-            player.DisablePlayerCollider();
+            player.UpdatePlayerCollider(false);
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
             _hiddenPlayers.Add(player);
@@ -332,7 +332,7 @@ namespace Oxide.Plugins
             }
 
             player._limitedNetworking = false;
-            player.EnablePlayerCollider();
+            player.UpdatePlayerCollider(false);
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
             _hiddenPlayers.Remove(player);
