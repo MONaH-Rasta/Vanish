@@ -20,12 +20,13 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Wulf/lukespragg", "0.6.0")]
+    [Info("Vanish", "Wulf/lukespragg", "0.6.1")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
         #region Configuration
 
+        static Vanish ins;
         private Configuration config;
 
         public class Configuration
@@ -121,6 +122,7 @@ namespace Oxide.Plugins
 
         private void Init()
         {
+            ins = this;
             permission.RegisterPermission(permAbilitiesInvulnerable, this);
             permission.RegisterPermission(permAbilitiesPersistence, this);
             permission.RegisterPermission(permAbilitiesTeleport, this);
@@ -199,7 +201,7 @@ namespace Oxide.Plugins
 
                 lastActiveItem = activeItem;
 
-                if (onlinePlayers[basePlayer] != null && onlinePlayers[basePlayer].IsInvisible)
+                if (ins.onlinePlayers[basePlayer] != null && ins.onlinePlayers[basePlayer].IsInvisible)
                 {
                     HeldEntity heldEntity = basePlayer.GetHeldEntity();
                     if (heldEntity != null)
@@ -223,7 +225,7 @@ namespace Oxide.Plugins
         }
 
         [OnlinePlayers]
-        private static Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
+        private Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
 
         #endregion Data Storage
 
@@ -648,10 +650,10 @@ namespace Oxide.Plugins
 
         #region Persistence Handling
 
-        /*private void OnPlayerInit(BasePlayer basePlayer)
+        private void OnPlayerInit(BasePlayer basePlayer)
         {
             // TODO: Persistence permission check and handling
-        }*/
+        }
 
         #endregion Persistence Handling
 
@@ -665,7 +667,7 @@ namespace Oxide.Plugins
                 if (guiInfo.TryGetValue(basePlayer.userID, out gui))
                 {
                     CuiHelper.DestroyUi(basePlayer, gui);
-                }                
+                }
             }
 
             var objects = UnityEngine.Object.FindObjectsOfType(typeof(WeaponBlock));
