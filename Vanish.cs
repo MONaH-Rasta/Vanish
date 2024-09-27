@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "nivex", "0.7.4")]
+    [Info("Vanish", "nivex", "0.7.6")]
     [Description("Allows players with permission to become truly invisible")]
     public class Vanish : RustPlugin
     {
@@ -123,7 +123,8 @@ namespace Oxide.Plugins
                 ["VanishTimedOut"] = "Vanish time limit reached!",
                 ["Cooldown"] = "You must wait {0} seconds to use this command again!",
                 ["DailyLimitReached"] = "Daily limit of {0} uses has been reached!",
-                ["InvalidSoundPrefab"] = "Invalid sound effect prefab: {0}"
+                ["InvalidSoundPrefab"] = "Invalid sound effect prefab: {0}",
+                ["Indefinite"] = "This command is restricted. Please contact the Server Owner if you feel it should be otherwise."
             }, this);
         }
 
@@ -137,10 +138,9 @@ namespace Oxide.Plugins
         private const string permDamageAnimals = "vanish.damage.animals";
         private const string permDamageBuildings = "vanish.damage.buildings";
         private const string permDamagePlayers = "vanish.damage.players";
+        private const string permIndefinite = "vanish.indefinite";
         private const string permUse = "vanish.use";
         private bool soundEffectIsValid;
-
-        long TimeStamp() => (DateTime.Now.Ticks - DateTime.Parse("01/01/1970 00:00:00").Ticks) / 10000000;
 
         private void Init()
         {
@@ -151,6 +151,7 @@ namespace Oxide.Plugins
             permission.RegisterPermission(permDamageAnimals, this);
             permission.RegisterPermission(permDamageBuildings, this);
             permission.RegisterPermission(permDamagePlayers, this);
+            permission.RegisterPermission(permIndefinite, this);
             permission.RegisterPermission(permUse, this);
 
             AddLocalizedCommand("CommandVanish", "VanishCommand");
@@ -348,6 +349,22 @@ namespace Oxide.Plugins
             public Timer groupSwitchTimer;
         }
 
+        public bool AnyInvisible
+        {
+            get
+            {
+                foreach(var onlinePlayer in onlinePlayers.Values)
+                {
+                    if (onlinePlayer.IsInvisible)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
         [OnlinePlayers]
         private Hash<BasePlayer, OnlinePlayer> onlinePlayers = new Hash<BasePlayer, OnlinePlayer>();
 
@@ -406,39 +423,46 @@ namespace Oxide.Plugins
             {
                 if (!storedData.Limits.ContainsKey(player.Id))
                 {
-                    storedData.Limits.Add(player.Id, new StoredData.Limit());
-                    var limit = storedData.Limits[player.Id];
+                    storedData.Limits.Add(player.Id, new StoredData.Limit() { Date = DateTime.Now.ToString(), Uses = 0 });
+                }
+
+                var limit = storedData.Limits[player.Id];
+
+                if (DateTime.Parse(limit.Date).Day < DateTime.Now.Day)
+                {
                     limit.Date = DateTime.Now.ToString();
                     limit.Uses = 0;
                 }
-                else
+                else if (!IsInvisible(basePlayer))
                 {
-                    var limit = storedData.Limits[player.Id];
-
-                    if (DateTime.Parse(limit.Date).Day < DateTime.Now.Day)
-                    {
-                        limit.Date = DateTime.Now.ToString();
-                        limit.Uses = 0;
-                    }
-                    else if (++limit.Uses > config.DailyLimit && !IsInvisible(basePlayer))
+                    if (limit.Uses >= config.DailyLimit)
                     {
                         Message(player, Lang("DailyLimitReached", player.Id, config.DailyLimit));
                         return;
                     }
+
+                    limit.Uses++;
                 }
             }
 
-            long stamp = TimeStamp();
+            int stamp = Facepunch.Math.Epoch.Current;
 
-            if (config.CommandCooldown > 0 && storedData.Cooldowns.ContainsKey(player.Id) && !IsInvisible(basePlayer))
+            if (config.CommandCooldown > 0)
             {
-                if (storedData.Cooldowns[player.Id] - stamp > 0)
+                if (!storedData.Cooldowns.ContainsKey(player.Id))
                 {
-                    Message(player, Lang("Cooldown", player.Id, storedData.Cooldowns[player.Id] - stamp));
-                    return;
+                    storedData.Cooldowns.Add(player.Id, stamp + config.CommandCooldown);
                 }
+                else if (!IsInvisible(basePlayer))
+                {
+                    if (storedData.Cooldowns[player.Id] - stamp > 0)
+                    {
+                        Message(player, Lang("Cooldown", player.Id, storedData.Cooldowns[player.Id] - stamp));
+                        return;
+                    }
 
-                storedData.Cooldowns.Remove(player.Id);
+                    storedData.Cooldowns.Remove(player.Id);
+                }
             }
 
             if (config.PlaySoundEffect && soundEffectIsValid)
@@ -448,21 +472,17 @@ namespace Oxide.Plugins
 
             if (IsInvisible(basePlayer))
             {
+                if (player.HasPermission(permIndefinite))
+                {
+                    Message(player, Lang("Indefinite", player.Id));
+                    return;
+                }
+
                 Reappear(basePlayer);
             }
             else
             {
                 Disappear(basePlayer);
-            }
-
-            if (config.CommandCooldown > 0 && !storedData.Cooldowns.ContainsKey(player.Id))
-            {
-                storedData.Cooldowns.Add(player.Id, stamp + config.CommandCooldown);
-            }
-
-            if (config.DailyLimit > 0 && storedData.Limits.ContainsKey(player.Id) && IsInvisible(basePlayer))
-            {
-                storedData.Limits[player.Id].Uses++;
             }
         }
 
@@ -522,10 +542,18 @@ namespace Oxide.Plugins
             basePlayer.UpdatePlayerCollider(false);
 
             player.IsInvisible = true;
-            player.groupSwitchTimer?.Destroy();
+
+            if (player.groupSwitchTimer != null)
+            {
+                player.groupSwitchTimer.Destroy();
+            }
+
             player.groupSwitchTimer = timer.Every(5f, () =>
             {
-                basePlayer?.UpdateNetworkGroup();
+                if (basePlayer != null)
+                {
+                    basePlayer.UpdateNetworkGroup();
+                }
             });
 
             if (basePlayer.GetComponent<WeaponBlock>() == null && basePlayer.IPlayer.HasPermission(permAbilitiesHideWeapons))
@@ -651,6 +679,7 @@ namespace Oxide.Plugins
             }
 
             return null;
+		 
         }*/
 
         // Hide from all other NPCs
@@ -740,14 +769,11 @@ namespace Oxide.Plugins
                     return true;
                 }
 
-                // Don't make lock sound if you're not authed while vanished
+                // Don't make lock sound while vanished
                 CodeLock codeLock = baseLock as CodeLock;
                 if (codeLock != null)
                 {
-                    if (!codeLock.whitelistPlayers.Contains(player.userID) && !codeLock.guestPlayers.Contains(player.userID))
-                    {
-                        return false;
-                    }
+                    return codeLock.whitelistPlayers.Contains(player.userID) || codeLock.guestPlayers.Contains(player.userID);
                 }
             }
 
@@ -821,10 +847,12 @@ namespace Oxide.Plugins
             }
 
             Message(basePlayer.IPlayer, "VanishDisabled");
-            if (onlinePlayers.Values.Count(p => p.IsInvisible) <= 0)
+
+            if (!AnyInvisible)
             {
                 Unsubscribe(nameof(CanNetworkTo));
             }
+
             Interface.CallHook("OnVanishReappear", basePlayer);
             storedData.Invisible.Remove(basePlayer.userID);
         }
@@ -975,7 +1003,7 @@ namespace Oxide.Plugins
             if (!basePlayer || !basePlayer.IsConnected)
                 return;
 
-            if (storedData.Invisible.Contains(basePlayer.userID))
+            if (storedData.Invisible.Contains(basePlayer.userID) || basePlayer.IPlayer.HasPermission(permIndefinite))
             {
                 if (basePlayer.IPlayer.HasPermission(permUse))
                 {
@@ -992,8 +1020,12 @@ namespace Oxide.Plugins
         {
             if (!Interface.Oxide.IsShuttingDown)
             {
-                foreach (BasePlayer basePlayer in BasePlayer.activePlayerList.Where(p => p != null))
+                foreach (BasePlayer basePlayer in BasePlayer.activePlayerList)
                 {
+                    if (!basePlayer || !basePlayer.IsConnected)
+                    {
+                        continue;
+                    }
                     string gui;
                     if (guiInfo.TryGetValue(basePlayer.userID, out gui))
                     {
