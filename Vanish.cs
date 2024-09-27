@@ -4,7 +4,6 @@ using Oxide.Core;
 using Oxide.Core.Configuration;
 using Oxide.Core.Libraries.Covalence;
 using Oxide.Game.Rust.Cui;
-using ProtoBuf;
 using Rust;
 using System;
 using System.Collections.Generic;
@@ -20,8 +19,8 @@ namespace Oxide.Plugins
     public class Vanish : CovalencePlugin
     {
         private static Vanish vanish;
-        private readonly List<ulong> _hiddenPlayers = new List<ulong>();
-        private List<ulong> _hiddenOffline = new List<ulong>();
+        private readonly List<ulong> _hiddenPlayers = new();
+        private List<ulong> _hiddenOffline = new();
         private static List<string> _registeredhooks;
         private static int PlayerLayermask;
         private static DamageTypeList _EmptyDmgList;
@@ -95,7 +94,7 @@ namespace Oxide.Plugins
             public Dictionary<string, object> ToDictionary() => JsonConvert.DeserializeObject<Dictionary<string, object>>(ToJson());
         }
 
-        protected override void LoadDefaultConfig() => config = new Configuration();
+        protected override void LoadDefaultConfig() => config = new();
 
         protected override void LoadConfig()
         {
@@ -211,8 +210,8 @@ namespace Oxide.Plugins
             vanish = this;
             cachedVanishUI = CreateVanishUI();
             PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
-            _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage", "OnPlayerViolation" };
-            _EmptyDmgList = new DamageTypeList();
+            _registeredhooks = new() { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage", "OnPlayerViolation" };
+            _EmptyDmgList = new();
 
             // Register universal chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
@@ -276,7 +275,7 @@ namespace Oxide.Plugins
             }
             catch
             {
-                _hiddenOffline = new List<ulong>();
+                _hiddenOffline = new();
             }
             Puts("Load Data");
         }
@@ -370,8 +369,8 @@ namespace Oxide.Plugins
             else Disappear(player);
         }
 
-        private string drowneffect = "28ad47c8e6d313742a7a2740674a25b5";
-        private string falldamageeffect = "ca14ed027d5924003b1c5d9e523a5fce";
+        private readonly string drowneffect = "28ad47c8e6d313742a7a2740674a25b5";
+        private readonly string falldamageeffect = "ca14ed027d5924003b1c5d9e523a5fce";
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
@@ -449,9 +448,9 @@ namespace Oxide.Plugins
             public float calories;
         }
 
-        private GameObjectRef _emptygameObject = new GameObjectRef();
-        private Dictionary<ulong, MetabolismValues> _storedMetabolism = new Dictionary<ulong, MetabolismValues>();
-        private string noclip = "noclip";
+        private readonly GameObjectRef _emptygameObject = new();
+        private readonly Dictionary<ulong, MetabolismValues> _storedMetabolism = new();
+        private readonly string noclip = "noclip";
 
         private void Disappear(BasePlayer player)
         {
@@ -486,7 +485,7 @@ namespace Oxide.Plugins
                 player.metabolism.SendChangesToClient();
             }
             if (config.MetabolismReset && !player._limitedNetworking)
-                _storedMetabolism[player.userID] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
+                _storedMetabolism[player.userID] = new() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
 
             List<Connection> connections = Pool.Get<List<Connection>>();
             foreach (var con in Net.sv.connections)
@@ -595,7 +594,7 @@ namespace Oxide.Plugins
             {
                 float terrainY = TerrainMeta.HeightMap.GetHeight(player.transform.position);
                 if (player.transform.position.y > terrainY)
-                    player.transform.position = new Vector3(player.transform.position.x, terrainY - 5f, player.transform.position.z);
+                    player.transform.position = new(player.transform.position.x, terrainY - 5f, player.transform.position.z);
 
                 if (!_hiddenOffline.Contains(player.userID))
                     _hiddenOffline.Add(player.userID);
@@ -633,7 +632,7 @@ namespace Oxide.Plugins
         #region GUI
         private CuiElementContainer CreateVanishUI()
         {
-            CuiElementContainer elements = new CuiElementContainer();
+            CuiElementContainer elements = new();
             string panel = elements.Add(new CuiPanel
             {
                 Image = { Color = "0.5 0.5 0.5 0.0" },
@@ -657,12 +656,12 @@ namespace Oxide.Plugins
         public class VanishPositionUpdate : FacepunchBehaviour
         {
             private BasePlayer player;
-            private static int Layermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Construction), LayerMask.LayerToName((int)Layer.Deployed), LayerMask.LayerToName((int)Layer.Vehicle_World), LayerMask.LayerToName((int)Layer.Player_Server));
-            LootableCorpse corpse;
+            private static readonly int Layermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Construction), LayerMask.LayerToName((int)Layer.Deployed), LayerMask.LayerToName((int)Layer.Vehicle_World), LayerMask.LayerToName((int)Layer.Player_Server));
+            readonly LootableCorpse corpse;
             GameObject child;
             SphereCollider col;
-            int LayerReserved1 = (int)Layer.Reserved1;
-            BUTTON _reload = BUTTON.RELOAD;
+            readonly int LayerReserved1 = (int)Layer.Reserved1;
+            readonly BUTTON _reload = BUTTON.RELOAD;
 
             private void Awake()
             {
@@ -829,7 +828,7 @@ namespace Oxide.Plugins
 
                     BaseEntity.Query.Server.AddPlayer(player);
                     player.lastAdminCheatTime = Time.realtimeSinceStartup;
-                    player.transform.localScale = new Vector3(1, 1, 1);
+                    player.transform.localScale = new(1, 1, 1);
 
                     //Reset Triggers
                     if (player.triggers != null)
