@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.5.0")]
+    [Info("Vanish", "Whispers88", "1.5.1")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
@@ -269,6 +269,12 @@ namespace Oxide.Plugins
             player.syncPosition = true;
             UnityEngine.Object.Destroy(player.GetComponent<VanishPositionUpdate>());
 
+
+            //metabolism
+            player.metabolism.temperature.min = -100;
+            player.metabolism.temperature.max = 100;
+            player.metabolism.radiation_poison.max = 500;
+            player.metabolism.oxygen.min = 0;
             player.metabolism.Reset();
 
             player._limitedNetworking = false;
@@ -316,7 +322,13 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
             if (config.AntiHack) player.PauseFlyHackDetection(9000000f);
 
+
+            //metabolism
             player.CancelInvoke("MetabolismUpdate");
+            player.metabolism.temperature.min = 20;
+            player.metabolism.temperature.max = 20;
+            player.metabolism.radiation_poison.max = 0;
+            player.metabolism.oxygen.min = 1;
 
             var connections = Net.sv.connections.Where(con => con.connected && con.isAuthenticated && con.player is BasePlayer && con.player != player).ToList();
             player.OnNetworkSubscribersLeave(connections);
