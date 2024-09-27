@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.3.3")]
+    [Info("Vanish", "Whispers88", "1.3.6")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : RustPlugin
     {
@@ -151,22 +151,12 @@ namespace Oxide.Plugins
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
 
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                if (!HasPerm(player.UserIDString, permavanish)) continue;
-
-                if (!IsInvisible(player)) Disappear(player);
-            }
+            BasePlayer.activePlayerList.Where(i => HasPerm(i.UserIDString, permavanish) && !IsInvisible(i)).ToList().ForEach(j => Disappear(j));
         }
 
         private void Unload()
         {
-            foreach (var player in _hiddenPlayers)
-            {
-                if (player == null) continue;
-                Reappear(player);
-            }
-            _hiddenPlayers.Clear();
+            _hiddenPlayers.Where(i => i != null).ToList().ForEach(j => Reappear(j));
         }
 
         #endregion Initialization
@@ -176,7 +166,7 @@ namespace Oxide.Plugins
         private void VanishCommand(IPlayer iplayer, string command, string[] args)
         {
             var player = (BasePlayer)iplayer.Object;
-            if (!HasPerm(player.UserIDString, permallow) && !player.IsAdmin)
+            if (!HasPerm(player.UserIDString, permallow))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
@@ -291,7 +281,8 @@ namespace Oxide.Plugins
             if (_hiddenOffline.Contains(player))
             {
                 _hiddenOffline.Remove(player);
-                Disappear(player);
+                if (HasPerm(player.UserIDString, permallow))
+                    Disappear(player);
             }
             if (HasPerm(player.UserIDString, permavanish))
             {
