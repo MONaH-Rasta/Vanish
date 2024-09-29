@@ -15,7 +15,7 @@ using Rust.AI;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.4")]
+    [Info("Vanish", "Whispers88", "1.8.5")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -44,6 +44,12 @@ namespace Oxide.Plugins
 
             [JsonProperty("Use CanUseLockedEntity hook (Allows vanished players with the perm vanish.unlock to bypass locks. Set to false for better performance)")]
             public bool UseCanUseLockedEntity = true;
+
+            [JsonProperty("Automatically vanish players (with the vanish.use perm) on player connect")]
+            public bool EnforceOnConnect = true;
+
+            [JsonProperty("Automatically vanish players (with the vanish.use perm) on player disconnect")]
+            public bool EnforceOnDisconnect = true;
 
             [JsonProperty("Keep a vanished player hidden on disconnect")]
             public bool HideOnDisconnect = true;
@@ -211,7 +217,7 @@ namespace Oxide.Plugins
             vanish = this;
             cachedVanishUI = CreateVanishUI();
             PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
-            _registeredhooks = new List<string> { "CanUseLockedEntity", "OnPlayerDisconnected", "OnEntityTakeDamage", "OnPlayerViolation" };
+            _registeredhooks = new List<string> { "CanUseLockedEntity", "OnEntityTakeDamage" };
             _EmptyDmgList = new DamageTypeList();
 
             // Register universal chat/console commands
@@ -296,6 +302,7 @@ namespace Oxide.Plugins
             if(!HasPerm(player.UserIDString, PermInvView))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
+                return;
             }
             if (args.Length < 1)
             {
@@ -535,6 +542,8 @@ namespace Oxide.Plugins
         #region Hooks
         private void OnPlayerConnected(BasePlayer player)
         {
+            if(player == null) return;
+
             if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
             {
                 timer.Once(3f, () => OnPlayerConnected(player));
@@ -547,16 +556,21 @@ namespace Oxide.Plugins
                 if (HasPerm(player.UserIDString, PermAllow))
                 {
                     Disappear(player);
-                    if (config.NoClipOnVanish)
-                        player.SendConsoleCommand(noclip);
+                    return;
+
                 }
-                return;
             }
+
             if (HasPerm(player.UserIDString, PermVanish))
             {
                 Disappear(player);
-                if (config.NoClipOnVanish)
-                    player.SendConsoleCommand(noclip);
+                return;
+            }
+
+            if(config.EnforceOnConnect && HasPerm(player.UserIDString, PermAllow))
+            {
+                Disappear(player);
+                return;
             }
         }
 
@@ -587,6 +601,11 @@ namespace Oxide.Plugins
 
         private void OnPlayerDisconnected(BasePlayer player, string reason)
         {
+            if (config.EnforceOnDisconnect && HasPerm(player.UserIDString, PermAllow))
+            {
+                Disappear(player);
+            }
+
             if (!IsInvisible(player)) return;
 
             if (!config.HideOnDisconnect && !HasPerm(player.UserIDString, PermVanish))
