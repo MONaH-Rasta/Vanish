@@ -15,17 +15,17 @@ using Rust.AI;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.5")]
+    [Info("Vanish", "Whispers88", "1.8.6")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
-        private static Vanish vanish;
+        private static Vanish? vanish;
         private readonly List<ulong> _hiddenPlayers = new List<ulong>();
         private List<ulong> _hiddenOffline = new List<ulong>();
-        private static List<string> _registeredhooks;
+        private static List<string>? _registeredhooks;
         private static int PlayerLayermask;
-        private static DamageTypeList _EmptyDmgList;
-        CuiElementContainer cachedVanishUI = null;
+        private static DamageTypeList? _EmptyDmgList;
+        CuiElementContainer? cachedVanishUI = null;
 
         #region Configuration
 
@@ -270,6 +270,9 @@ namespace Oxide.Plugins
                 Reappear(hiddenPlayer);
             }
             SaveData();
+            vanish = null;
+            _registeredhooks = null;
+            _EmptyDmgList = null;
         }
 
         private DynamicConfigFile _hiddenOfflineData;
@@ -299,7 +302,7 @@ namespace Oxide.Plugins
         {
             BasePlayer player = (BasePlayer)iplayer.Object;
             if (player == null) return;
-            if(!HasPerm(player.UserIDString, PermInvView))
+            if (!HasPerm(player.UserIDString, PermInvView))
             {
                 if (config.EnableNotifications) Message(player.IPlayer, "NoPerms");
                 return;
@@ -542,7 +545,7 @@ namespace Oxide.Plugins
         #region Hooks
         private void OnPlayerConnected(BasePlayer player)
         {
-            if(player == null) return;
+            if (player == null) return;
 
             if (player.HasPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot))
             {
@@ -567,7 +570,7 @@ namespace Oxide.Plugins
                 return;
             }
 
-            if(config.EnforceOnConnect && HasPerm(player.UserIDString, PermAllow))
+            if (config.EnforceOnConnect && HasPerm(player.UserIDString, PermAllow))
             {
                 Disappear(player);
                 return;
