@@ -15,7 +15,7 @@ using Rust.AI;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.6")]
+    [Info("Vanish", "Whispers88", "1.8.7")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -322,6 +322,8 @@ namespace Oxide.Plugins
                 }
 
                 timer.Once(0.3f, () => { StartLootingPlayer(player, entity); });
+                return;
+
             }
             BasePlayer? foundplayer = null;
             if (ulong.TryParse(args[0], out ulong steamID))
