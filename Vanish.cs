@@ -15,7 +15,7 @@ using Rust.AI;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.7")]
+    [Info("Vanish", "Whispers88", "1.8.8")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -53,6 +53,12 @@ namespace Oxide.Plugins
 
             [JsonProperty("Keep a vanished player hidden on disconnect")]
             public bool HideOnDisconnect = true;
+
+            [JsonProperty("Teleport a vanished player under the map on disconnect")]
+            public bool UnderWorldOnDisconnect = true;
+
+            [JsonProperty("Teleport a vanished player above the map on connect")]
+            public bool AboveWorldOnConnect = true;
 
             [JsonProperty("Bypass violation checks for vanished players")]
             public bool BypassViolation = true;
@@ -397,7 +403,20 @@ namespace Oxide.Plugins
                 UnityEngine.Object.Destroy(vanishPositionUpdate);
 
             SimpleAIMemory.RemoveIgnorePlayer(player);
+            BaseEntity.Query.Server.AddPlayer(player);
 
+            player._limitedNetworking = false;
+            _hiddenPlayers.Remove(player.userID);
+
+            player.EnablePlayerCollider();
+            player.UpdateNetworkGroup();
+            player.SendNetworkUpdate();
+            player.GetHeldEntity()?.SendNetworkUpdate();
+
+            //Un-Mute Player Effects
+            player.drownEffect.guid = drowneffect;
+            player.fallDamageEffect.guid = falldamageeffect;
+            
             //metabolism
             if (config.Metabolism)
             {
@@ -409,29 +428,14 @@ namespace Oxide.Plugins
                 player.metabolism.wetness.max = 1;
             }
 
-            if (config.MetabolismReset)
+            if (config.MetabolismReset && _storedMetabolism.TryGetValue(player.userID, out MetabolismValues value))
             {
-                if (_storedMetabolism.TryGetValue(player.userID, out MetabolismValues value))
-                {
-                    player.SetHealth(value.health);
-                    player.metabolism.hydration.SetValue(value.hydration);
-                    player.metabolism.calories.SetValue(value.calories);
-                }
+                player.SetHealth(value.health);
+                player.metabolism.hydration.SetValue(value.hydration);
+                player.metabolism.calories.SetValue(value.calories);
                 _storedMetabolism.Remove(player.userID);
             }
-
-            player._limitedNetworking = false;
-
-            _hiddenPlayers.Remove(player.userID);
-
-            player.EnablePlayerCollider();
-            player.UpdateNetworkGroup();
-            player.SendNetworkUpdate();
-            player.GetHeldEntity()?.SendNetworkUpdate();
-
-            //Un-Mute Player Effects
-            player.drownEffect.guid = drowneffect;
-            player.fallDamageEffect.guid = falldamageeffect;
+            player.metabolism.SendChangesToClient();
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
@@ -454,7 +458,7 @@ namespace Oxide.Plugins
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
-        private struct MetabolismValues
+        private class MetabolismValues
         {
             public float health;
             public float hydration;
@@ -478,16 +482,24 @@ namespace Oxide.Plugins
             }
 
             SimpleAIMemory.AddIgnorePlayer(player);
+            BaseEntity.Query.Server.RemovePlayer(player);
 
-            VanishPositionUpdate vanishPositionUpdate;
-            if (player.TryGetComponent<VanishPositionUpdate>(out vanishPositionUpdate))
-                UnityEngine.Object.Destroy(vanishPositionUpdate);
+            player.syncPosition = false;
+            player.limitNetworking = true;
+            player.fallDamageEffect = _emptygameObject;
+            player.drownEffect = _emptygameObject;
+            player.GetHeldEntity()?.SetHeld(false);
+            player.DisablePlayerCollider();
 
-            player.gameObject.AddComponent<VanishPositionUpdate>();
+            if (config.MetabolismReset)
+                _storedMetabolism[player.userID] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
 
             //metabolism
             if (config.Metabolism)
             {
+                player.SetHealth(100f);
+                player.metabolism.calories.value = 500;
+                player.metabolism.hydration.value = 250;
                 player.metabolism.temperature.min = 20;
                 player.metabolism.temperature.max = 20;
                 player.metabolism.radiation_poison.max = 0;
@@ -497,8 +509,6 @@ namespace Oxide.Plugins
                 player.metabolism.isDirty = true;
                 player.metabolism.SendChangesToClient();
             }
-            if (config.MetabolismReset && !player._limitedNetworking)
-                _storedMetabolism[player.userID] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
 
             List<Connection> connections = Pool.Get<List<Connection>>();
             foreach (var con in Net.sv.connections)
@@ -509,14 +519,11 @@ namespace Oxide.Plugins
             player.OnNetworkSubscribersLeave(connections);
             Pool.FreeUnmanaged(ref connections);
 
-            player.DisablePlayerCollider();
-            player.syncPosition = false;
+            VanishPositionUpdate vanishPositionUpdate;
+            if (player.TryGetComponent<VanishPositionUpdate>(out vanishPositionUpdate))
+                UnityEngine.Object.Destroy(vanishPositionUpdate);
 
-            player._limitedNetworking = true;
-
-            //Mute Player Effects
-            player.fallDamageEffect = _emptygameObject;
-            player.drownEffect = _emptygameObject;
+            player.gameObject.AddComponent<VanishPositionUpdate>();
 
             if (_hiddenPlayers.Count == 1) SubscribeToHooks();
 
@@ -554,7 +561,12 @@ namespace Oxide.Plugins
                 timer.Once(3f, () => OnPlayerConnected(player));
                 return;
             }
-
+            if (config.AboveWorldOnConnect && player._limitedNetworking)
+            {
+                float terrainY = TerrainMeta.HeightMap.GetHeight(player.transform.position);
+                if (player.transform.position.y < terrainY)
+                    player.transform.position = new Vector3(player.transform.position.x, terrainY + 0.5f, player.transform.position.z);
+            }
             if (_hiddenOffline.Contains(player.userID))
             {
                 _hiddenOffline.Remove(player.userID);
@@ -617,9 +629,12 @@ namespace Oxide.Plugins
                 Reappear(player);
             else
             {
-                float terrainY = TerrainMeta.HeightMap.GetHeight(player.transform.position);
-                if (player.transform.position.y > terrainY)
-                    player.transform.position = new Vector3(player.transform.position.x, terrainY - 5f, player.transform.position.z);
+                if (config.UnderWorldOnDisconnect)
+                {
+                    float terrainY = TerrainMeta.HeightMap.GetHeight(player.transform.position);
+                    if (player.transform.position.y > terrainY)
+                        player.transform.position = new Vector3(player.transform.position.x, terrainY - 5f, player.transform.position.z);
+                }
 
                 if (!_hiddenOffline.Contains(player.userID))
                     _hiddenOffline.Add(player.userID);
@@ -692,7 +707,6 @@ namespace Oxide.Plugins
             {
                 player = GetComponent<BasePlayer>();
                 player.transform.localScale = Vector3.zero;
-                BaseEntity.Query.Server.RemovePlayer(player);
                 CreateChildGO();
             }
 
@@ -851,7 +865,6 @@ namespace Oxide.Plugins
                     if (player.IsConnected)
                         player.Connection.active = true;
 
-                    BaseEntity.Query.Server.AddPlayer(player);
                     player.lastAdminCheatTime = Time.realtimeSinceStartup;
                     player.transform.localScale = new Vector3(1, 1, 1);
 
