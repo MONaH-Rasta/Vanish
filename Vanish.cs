@@ -11,11 +11,11 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Facepunch;
-using Rust.AI;
+using Rust.Ai;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.8")]
+    [Info("Vanish", "Whispers88", "1.8.9")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
