@@ -15,7 +15,7 @@ using Rust.Ai;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.8.9")]
+    [Info("Vanish", "Whispers88", "1.9.0")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -403,6 +403,7 @@ namespace Oxide.Plugins
                 UnityEngine.Object.Destroy(vanishPositionUpdate);
 
             SimpleAIMemory.RemoveIgnorePlayer(player);
+            BaseEntity.Query.Server.RemovePlayer(player); // have to remove first in case of other plugins
             BaseEntity.Query.Server.AddPlayer(player);
 
             player._limitedNetworking = false;
@@ -416,7 +417,7 @@ namespace Oxide.Plugins
             //Un-Mute Player Effects
             player.drownEffect.guid = drowneffect;
             player.fallDamageEffect.guid = falldamageeffect;
-            
+
             //metabolism
             if (config.Metabolism)
             {
