@@ -15,7 +15,7 @@ using Rust.Ai;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.9.0")]
+    [Info("Vanish", "Whispers88", "1.9.1")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -55,7 +55,7 @@ namespace Oxide.Plugins
             public bool HideOnDisconnect = true;
 
             [JsonProperty("Teleport a vanished player under the map on disconnect")]
-            public bool UnderWorldOnDisconnect = true;
+            public bool UnderWorldOnDisconnect = false;
 
             [JsonProperty("Teleport a vanished player above the map on connect")]
             public bool AboveWorldOnConnect = true;
@@ -723,9 +723,9 @@ namespace Oxide.Plugins
                 BaseEntity entity = raycastHit.GetEntity() as BaseEntity;
 
                 if (entity == null) return;
-                if (entity is StorageContainer storageContainer)
+
+                if (entity is StorageContainer container)
                 {
-                    StorageContainer container = (StorageContainer)entity;
                     player.inventory.loot.Clear();
                     player.inventory.loot.AddContainer(container.inventory);
                     player.inventory.loot.entitySource = RelationshipManager.ServerInstance;
@@ -801,9 +801,9 @@ namespace Oxide.Plugins
                     case 1:
                         player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
                     case 2:
-                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
+                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, true); break;
                     case 3:
-                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, true); break;
+                        player.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench3, true); break;
                 }
             }
 
