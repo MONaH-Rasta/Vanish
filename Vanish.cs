@@ -12,12 +12,11 @@ using System.Linq;
 using UnityEngine;
 using Facepunch;
 using Rust.Ai;
-using HarmonyLib;
-using Oxide.Core.Plugins;
+using Oxide.Core.Plugins; 
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.9.2")]
+    [Info("Vanish", "Whispers88", "1.9.3")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -966,22 +965,5 @@ namespace Oxide.Plugins
         public void _Reappear(BasePlayer basePlayer) => Reappear(basePlayer);
         public bool _IsInvisible(BasePlayer basePlayer) => IsInvisible(basePlayer);
         #endregion
-
-        #region Harmony
-        //Used for OcclusionPlayerFound
-        [HarmonyPatch(typeof(BasePlayer), "OcclusionPlayerFound"), AutoPatch]
-        private static class BasePlayer_OcclusionPlayerFound_Patch
-        {
-            [HarmonyPrefix]
-            private static bool Prefix(BasePlayer player1, BasePlayer player2, bool cache)
-            {
-                if (player2._limitedNetworking)
-                {
-                    return false;
-                }
-                return true;
-            }
-        }
-        #endregion Harmony
     }
 }
