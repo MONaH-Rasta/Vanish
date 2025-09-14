@@ -1,32 +1,37 @@
+using Facepunch;
+using HarmonyLib;
 using Network;
 using Newtonsoft.Json;
 using Oxide.Core;
 using Oxide.Core.Configuration;
 using Oxide.Core.Libraries.Covalence;
+using Oxide.Core.Plugins;
 using Oxide.Game.Rust.Cui;
 using ProtoBuf;
 using Rust;
+using Rust.Ai;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using UnityEngine;
-using Facepunch;
-using Rust.Ai;
-using Oxide.Core.Plugins; 
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "1.9.3")]
+    [Info("Vanish", "Whispers88", "2.0.0")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
-        private static Vanish? vanish;
-        private readonly List<ulong> _hiddenPlayers = new List<ulong>();
+        private static Vanish vanish;
+
+        private static HashSet<BasePlayer> _hiddenPlayers = new HashSet<BasePlayer>();
+
         private List<ulong> _hiddenOffline = new List<ulong>();
-        private static List<string>? _registeredhooks;
-        private static int PlayerLayermask;
-        private static DamageTypeList? _EmptyDmgList;
-        CuiElementContainer? cachedVanishUI = null;
+        private List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerViolation", "OnMapMarkerAdded" };
+        private int PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
+        private DamageTypeList _EmptyDmgList = new DamageTypeList();
+
+        CuiElementContainer cachedVanishUI = null;
 
         #region Configuration
 
@@ -47,10 +52,10 @@ namespace Oxide.Plugins
             public bool UseCanUseLockedEntity = true;
 
             [JsonProperty("Automatically vanish players (with the vanish.use perm) on player connect")]
-            public bool EnforceOnConnect = true;
+            public bool EnforceOnConnect = false;
 
             [JsonProperty("Automatically vanish players (with the vanish.use perm) on player disconnect")]
-            public bool EnforceOnDisconnect = true;
+            public bool EnforceOnDisconnect = false;
 
             [JsonProperty("Keep a vanished player hidden on disconnect")]
             public bool HideOnDisconnect = true;
@@ -70,8 +75,8 @@ namespace Oxide.Plugins
             [JsonProperty("Disable metabolism in vanish")]
             public bool Metabolism = true;
 
-            [JsonProperty("Reset hydration and health on un-vanishing (resets to pre-vanished state)")]
-            public bool MetabolismReset = true;
+            [JsonProperty("Enable teleport to marker when vanished")]
+            public bool TeleportToMarker = false;
 
             [JsonProperty("Enable vanishing and reappearing sound effects")]
             public bool EnableSound = true;
@@ -91,11 +96,17 @@ namespace Oxide.Plugins
             [JsonProperty("Enable GUI")]
             public bool EnableGUI = true;
 
+            [JsonProperty("Use Native Invis Icon")]
+            public bool NativeIcon = false;
+
             [JsonProperty("Icon URL (.png or .jpg)")]
             public string ImageUrlIcon = "https://i.ibb.co/3rZzftx/yL9HNRy.png";
 
+            [JsonProperty("Icon Sprite")]
+            public string ImageSprite = "assets/icons/refresh.png";
+
             [JsonProperty("Image Color")]
-            public string ImageColor = "1 1 1 0.3";
+            public string ImageColor = "1 1 1 0.5";
 
             [JsonProperty("Image AnchorMin")]
             public string ImageAnchorMin = "0.175 0.017";
@@ -119,19 +130,6 @@ namespace Oxide.Plugins
                 if (config == null)
                 {
                     throw new JsonException();
-                }
-
-                if (config.ImageUrlIcon == "http://i.imgur.com/Gr5G3YI.png")
-                {
-                    config.ImageUrlIcon = "https://i.imgur.com/yL9HNRy.png";
-                    config.ImageColor = "1 1 1 0.8";
-                    if (config.ImageAnchorMin == "0.175 0.017" && config.ImageAnchorMax == "0.22 0.08")
-                    {
-                        config.ImageAnchorMin = "0.18 0.017";
-                        config.ImageAnchorMax = "0.22 0.09";
-                    }
-                    LogWarning("Updating image Icon URL");
-                    SaveConfig();
                 }
 
                 if (!config.ToDictionary().Keys.SequenceEqual(Config.ToDictionary(x => x.Key, x => x.Value).Keys))
@@ -159,7 +157,6 @@ namespace Oxide.Plugins
             LoadData();
             InitVanishedPlayers();
         }
-
         private void InitVanishedPlayers()
         {
             foreach (var playerid in _hiddenOffline)
@@ -217,19 +214,18 @@ namespace Oxide.Plugins
         private const string PermDamage = "vanish.damage";
         private const string PermVanish = "vanish.permanent";
         private const string PermInvView = "vanish.invviewer";
+        private const string PermTeleport = "vanish.teleport";
 
 
         private void Init()
         {
             vanish = this;
             cachedVanishUI = CreateVanishUI();
-            PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
-            _registeredhooks = new List<string> { "CanUseLockedEntity", "OnEntityTakeDamage" };
-            _EmptyDmgList = new DamageTypeList();
 
             // Register universal chat/console commands
             AddLocalizedCommand(nameof(VanishCommand));
             AddCovalenceCommand(config.InvViewCMD, "InventoryViewerCMD");
+            AddCovalenceCommand(new[] { "debug.invis", "invis" }, "RedirectCMD");
 
             // Register permissions for commands
             permission.RegisterPermission(PermAllow, this);
@@ -237,7 +233,7 @@ namespace Oxide.Plugins
             permission.RegisterPermission(PermDamage, this);
             permission.RegisterPermission(PermVanish, this);
             permission.RegisterPermission(PermInvView, this);
-
+            permission.RegisterPermission(PermTeleport, this);
 
             //Unsubscribe from hooks
             UnSubscribeFromHooks();
@@ -257,6 +253,11 @@ namespace Oxide.Plugins
                 _registeredhooks.Remove("CanUseLockedEntity");
             }
 
+            if (!config.TeleportToMarker)
+            {
+                _registeredhooks.Remove("OnMapMarkerAdded");
+            }
+
             foreach (var player in BasePlayer.activePlayerList)
             {
                 if (!HasPerm(player.UserIDString, PermVanish) || IsInvisible(player)) continue;
@@ -267,15 +268,15 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            for (int i = _hiddenPlayers.Count - 1; i > -1; i--)
+            foreach (var hiddenPlayer in _hiddenPlayers.ToList())
             {
-                BasePlayer? hiddenPlayer = GetPlayer(_hiddenPlayers[i]);
                 if (hiddenPlayer == null) continue;
 
                 if (!_hiddenOffline.Contains(hiddenPlayer.userID))
                     _hiddenOffline.Add(hiddenPlayer.userID);
                 Reappear(hiddenPlayer);
             }
+
             SaveData();
             vanish = null;
             _registeredhooks = null;
@@ -305,6 +306,15 @@ namespace Oxide.Plugins
         #endregion Initialization
 
         #region Commands
+
+        private void RedirectCMD(IPlayer iplayer, string command, string[] args)
+        {
+            BasePlayer basePlayer = iplayer.Object as BasePlayer;
+            if (basePlayer == null) return;
+            basePlayer.ConsoleMessage("This command has been replaced with /vanish");
+            VanishCommand(iplayer, command, args);
+        }
+
         private void InventoryViewerCMD(IPlayer iplayer, string command, string[] args)
         {
             BasePlayer player = (BasePlayer)iplayer.Object;
@@ -408,7 +418,8 @@ namespace Oxide.Plugins
             BaseEntity.Query.Server.AddPlayer(player);
 
             player._limitedNetworking = false;
-            _hiddenPlayers.Remove(player.userID);
+            player.isInvisible = false; // for occlusion falldmg & antihack
+            _hiddenPlayers.Remove(player);
 
             player.EnablePlayerCollider();
             player.UpdateNetworkGroup();
@@ -419,25 +430,10 @@ namespace Oxide.Plugins
             player.drownEffect.guid = drowneffect;
             player.fallDamageEffect.guid = falldamageeffect;
 
-            //metabolism
             if (config.Metabolism)
             {
-                player.metabolism.temperature.min = -100;
-                player.metabolism.temperature.max = 100;
-                player.metabolism.radiation_poison.max = 500;
-                player.metabolism.oxygen.min = 0;
-                player.metabolism.calories.min = 0;
-                player.metabolism.wetness.max = 1;
+                RestartMetabolism(player);
             }
-
-            if (config.MetabolismReset && _storedMetabolism.TryGetValue(player.userID, out MetabolismValues value))
-            {
-                player.SetHealth(value.health);
-                player.metabolism.hydration.SetValue(value.hydration);
-                player.metabolism.calories.SetValue(value.calories);
-                _storedMetabolism.Remove(player.userID);
-            }
-            player.metabolism.SendChangesToClient();
 
             if (_hiddenPlayers.Count == 0) UnSubscribeFromHooks();
 
@@ -455,26 +451,22 @@ namespace Oxide.Plugins
 
             CuiHelper.DestroyUi(player, "VanishUI");
 
+            if (config.NativeIcon)
+            {
+                player.SendConsoleCommand("debug.setinvis_ui false");
+            }
+
             if (config.NoClipOnVanish && player.IsFlying) player.SendConsoleCommand(noclip);
 
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
-        private class MetabolismValues
-        {
-            public float health;
-            public float hydration;
-            public float calories;
-        }
-
         private GameObjectRef _emptygameObject = new GameObjectRef();
-        private Dictionary<ulong, MetabolismValues> _storedMetabolism = new Dictionary<ulong, MetabolismValues>();
-        private string noclip = "noclip";
+        private const string noclip = "noclip";
 
         private void Disappear(BasePlayer player)
         {
-            if (!_hiddenPlayers.Contains(player.userID))
-                _hiddenPlayers.Add(player.userID);
+            _hiddenPlayers.Add(player);
 
             if (Interface.CallHook("OnVanishDisappear", player) != null) return;
 
@@ -488,28 +480,15 @@ namespace Oxide.Plugins
 
             player.syncPosition = false;
             player.limitNetworking = true;
+            //player.isInvisible = true; // for occlusion falldmg & antihack
             player.fallDamageEffect = _emptygameObject;
             player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
             player.DisablePlayerCollider();
 
-            if (config.MetabolismReset)
-                _storedMetabolism[player.userID] = new MetabolismValues() { health = player.health, hydration = player.metabolism.hydration.value, calories = player.metabolism.calories.value };
-
-            //metabolism
             if (config.Metabolism)
             {
-                player.SetHealth(100f);
-                player.metabolism.calories.value = 500;
-                player.metabolism.hydration.value = 250;
-                player.metabolism.temperature.min = 20;
-                player.metabolism.temperature.max = 20;
-                player.metabolism.radiation_poison.max = 0;
-                player.metabolism.oxygen.min = 1;
-                player.metabolism.wetness.max = 0;
-                player.metabolism.calories.min = player.metabolism.calories.value;
-                player.metabolism.isDirty = true;
-                player.metabolism.SendChangesToClient();
+                MetabolismPause(player);
             }
 
             List<Connection> connections = Pool.Get<List<Connection>>();
@@ -541,14 +520,60 @@ namespace Oxide.Plugins
                 }
             }
 
-            if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted) player.SendConsoleCommand(noclip);
+            if (config.NoClipOnVanish && !player.IsFlying && !player.isMounted)
+                player.SendConsoleCommand(noclip);
 
             if (config.EnableGUI)
             {
                 CuiHelper.AddUi(player, cachedVanishUI);
             }
 
+            if (config.NativeIcon)
+            {
+                player.SendConsoleCommand("debug.setinvis_ui true");
+            }
+            else
+            {
+                player.SendConsoleCommand("debug.setinvis_ui false"); //for first login
+            }
+
             if (config.EnableNotifications) Message(player.IPlayer, "Vanished");
+        }
+
+        private void MetabolismPause(BasePlayer player)
+        {
+            if (player == null) return;
+
+            player.metabolism.calories.value = 500;
+            player.metabolism.hydration.value = 250;
+            player.metabolism.temperature.min = 20;
+            player.metabolism.temperature.max = 20;
+            player.metabolism.temperature.value = 20;
+            player.metabolism.radiation_poison.value = 0;
+            player.metabolism.radiation_poison.max = 0;
+            player.metabolism.oxygen.value = 1;
+            player.metabolism.oxygen.min = 1;
+            player.metabolism.wetness.max = 0;
+            player.metabolism.wetness.value = 0;
+            player.metabolism.calories.min = player.metabolism.calories.value;
+
+            player.SetHealth(player.MaxHealth());
+            player.metabolism.SendChangesToClient();
+            player.metabolism.timeSinceLastMetabolism = 0f;
+
+        }
+
+        private void RestartMetabolism(BasePlayer player)
+        {
+            if (player == null) return;
+            player.metabolism.timeSinceLastMetabolism = 1f;
+            player.metabolism.temperature.min = -100;
+            player.metabolism.temperature.max = 100;
+            player.metabolism.radiation_poison.max = 500;
+            player.metabolism.oxygen.min = 0;
+            player.metabolism.calories.min = 0;
+            player.metabolism.wetness.max = 1;
+            player.SendNetworkUpdate();
         }
 
         #endregion Commands
@@ -576,8 +601,8 @@ namespace Oxide.Plugins
                 {
                     Disappear(player);
                     return;
-
                 }
+                else Reappear(player);
             }
 
             if (HasPerm(player.UserIDString, PermVanish))
@@ -614,6 +639,7 @@ namespace Oxide.Plugins
             info.damageTypes = _EmptyDmgList;
             info.HitMaterial = 0;
             info.PointStart = Vector3.zero;
+            info.DoHitEffects = false;
             info.HitEntity = null;
             return true;
         }
@@ -627,7 +653,7 @@ namespace Oxide.Plugins
 
             if (!IsInvisible(player)) return;
 
-            if (!config.HideOnDisconnect && !HasPerm(player.UserIDString, PermVanish))
+            if (!HasPerm(player.UserIDString, PermVanish) && (!HasPerm(player.UserIDString, PermAllow) && config.HideOnDisconnect))
                 Reappear(player);
             else
             {
@@ -641,7 +667,7 @@ namespace Oxide.Plugins
                 if (!_hiddenOffline.Contains(player.userID))
                     _hiddenOffline.Add(player.userID);
 
-                _hiddenPlayers.Remove(player.userID);
+                _hiddenPlayers.Remove(player);
                 VanishPositionUpdate t;
                 if (player.TryGetComponent<VanishPositionUpdate>(out t))
                     UnityEngine.Object.Destroy(t);
@@ -669,6 +695,29 @@ namespace Oxide.Plugins
 
         private object? OnPlayerViolation(BasePlayer player, AntiHackType type, float amount) => IsInvisible(player) ? (object)true : null;
 
+        private void OnMapMarkerAdded(BasePlayer player, MapNote note)
+        {
+            if (player.isMounted || !IsInvisible(player) || !HasPerm(player.UserIDString, PermTeleport))
+                return;
+
+            UnityEngine.Vector3 newpos = new UnityEngine.Vector3(note.worldPosition.x, player.transform.position.y, note.worldPosition.z);
+            player.Teleport(newpos);
+
+            for (int i = 0; i < player.State.pointsOfInterest.Count; i++)
+            {
+                MapNote state = player.State.pointsOfInterest[i];
+                if (state != null && state.associatedId.Value == note.associatedId.Value)
+                {
+                    state.Dispose();
+                    player.State.pointsOfInterest.RemoveAt(i);
+                    player.DirtyPlayerState();
+                    player.SendMarkersToClient();
+                    player.TeamUpdate();
+                    return;
+                }
+            }
+        }
+
         #endregion Hooks
 
         #region GUI
@@ -685,7 +734,7 @@ namespace Oxide.Plugins
                 Parent = panel,
                 Components =
                 {
-                    new CuiRawImageComponent {Color = config.ImageColor, Url = config.ImageUrlIcon},
+                    new CuiRawImageComponent {Color = config.ImageColor, Url = config.ImageUrlIcon, Sprite = config.ImageSprite},
                     new CuiRectTransformComponent {AnchorMin = "0 0", AnchorMax = "1 1"}
                 }
             });
@@ -714,7 +763,14 @@ namespace Oxide.Plugins
 
             private void FixedUpdate()
             {
-                if (player == null || !player.serverInput.IsDown(_reload) || !player.serverInput.WasDown(_reload)) return;
+                if (player == null)
+                    return;
+
+                player.metabolism.timeSinceLastMetabolism = 0f; // pause metabolism
+
+                if (!player.serverInput.IsDown(_reload) || !player.serverInput.WasDown(_reload))
+                    return;
+
                 player.serverInput.previous.buttons = 0;
 
                 RaycastHit raycastHit;
@@ -965,5 +1021,91 @@ namespace Oxide.Plugins
         public void _Reappear(BasePlayer basePlayer) => Reappear(basePlayer);
         public bool _IsInvisible(BasePlayer basePlayer) => IsInvisible(basePlayer);
         #endregion
+
+        #region Harmony
+        //Used for voices/sounds
+        [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool), typeof(bool)), AutoPatch]
+        private static class BaseNetworkable_GetConnectionsWithin_Patch
+        {
+            [HarmonyPostfix]
+            private static void Postfix(BaseNetworkable __instance, ref List<Connection> __result, Vector3 position, float distance, bool addSecondaryConnections = false, bool useRcEntityPosition = true)
+            {
+                foreach (var vanishPlayer in _hiddenPlayers)
+                {
+                    if (vanishPlayer == null || __result.Contains(vanishPlayer.Connection) || (position - vanishPlayer.transform.position).sqrMagnitude > distance) continue;
+                    __result.Add(vanishPlayer.Connection);
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(BaseEntity), "SignalBroadcast", typeof(BaseEntity.Signal), typeof(string), typeof(Connection), typeof(string), typeof(float)), AutoPatch]
+        private static class BaseEntity_SignalBroadcast_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(BaseEntity __instance, BaseEntity.Signal signal, string arg, Connection sourceConnection, string fallbackEffect, float maxDistance)
+            {
+                if (sourceConnection == null)
+                    return true;
+
+                foreach (var vanishPlayer in _hiddenPlayers)
+                {
+                    if (vanishPlayer.userID == sourceConnection.userid)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        [HarmonyPatch(typeof(EffectNetwork), "Send", typeof(Effect)), AutoPatch]
+        private static class EffectNetwork_Send_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Effect effect)
+            {
+                if (effect == null || effect.source == 0)
+                    return true;
+
+                foreach (var vanishPlayer in _hiddenPlayers)
+                {
+                    if (vanishPlayer.userID == effect.source)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        //ownership stuff
+        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(Translate.Phrase)), AutoPatch]
+        private static class Item_SetItemOwnership_phrase_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Item __instance, BasePlayer player, Translate.Phrase reason)
+            {
+                if (player._limitedNetworking)
+                {
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(string)), AutoPatch]
+        private static class Item_SetItemOwnership_string_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Item __instance, BasePlayer player, string reason)
+            {
+                if (player._limitedNetworking)
+                {
+                    return false;
+                }
+                return true;
+            }
+        }
+        #endregion Harmony
     }
 }
