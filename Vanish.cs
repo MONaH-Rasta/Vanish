@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.0")]
+    [Info("Vanish", "Whispers88", "2.0.1")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -480,7 +480,7 @@ namespace Oxide.Plugins
 
             player.syncPosition = false;
             player.limitNetworking = true;
-            //player.isInvisible = true; // for occlusion falldmg & antihack
+            player.isInvisible = true; // for occlusion falldmg & antihack
             player.fallDamageEffect = _emptygameObject;
             player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
@@ -1073,35 +1073,6 @@ namespace Oxide.Plugins
                     {
                         return false;
                     }
-                }
-                return true;
-            }
-        }
-
-        //ownership stuff
-        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(Translate.Phrase)), AutoPatch]
-        private static class Item_SetItemOwnership_phrase_Patch
-        {
-            [HarmonyPrefix]
-            private static bool Prefix(Item __instance, BasePlayer player, Translate.Phrase reason)
-            {
-                if (player._limitedNetworking)
-                {
-                    return false;
-                }
-                return true;
-            }
-        }
-
-        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(string)), AutoPatch]
-        private static class Item_SetItemOwnership_string_Patch
-        {
-            [HarmonyPrefix]
-            private static bool Prefix(Item __instance, BasePlayer player, string reason)
-            {
-                if (player._limitedNetworking)
-                {
-                    return false;
                 }
                 return true;
             }
