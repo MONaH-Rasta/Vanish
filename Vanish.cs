@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.1")]
+    [Info("Vanish", "Whispers88", "2.0.2")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -395,6 +395,21 @@ namespace Oxide.Plugins
                 if (config.EnableNotifications) Message(player.IPlayer, "PermanentVanish");
                 return;
             }
+
+            //allows you to keybind vanish command with true/false args to force vanish or reappear
+            if (args.Length > 0 && bool.TryParse(args[0], out bool wantsVanish))
+            {
+                if (wantsVanish && !IsInvisible(player))
+                {
+                    Disappear(player);
+                }
+                else if (!wantsVanish && IsInvisible(player))
+                {
+                    Reappear(player);
+                }
+                return;
+            }
+
             if (IsInvisible(player)) Reappear(player);
             else Disappear(player);
         }
@@ -480,7 +495,7 @@ namespace Oxide.Plugins
 
             player.syncPosition = false;
             player.limitNetworking = true;
-            player.isInvisible = true; // for occlusion falldmg & antihack
+            player.isInvisible = false; // for occlusion falldmg & antihack
             player.fallDamageEffect = _emptygameObject;
             player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
@@ -697,25 +712,18 @@ namespace Oxide.Plugins
 
         private void OnMapMarkerAdded(BasePlayer player, MapNote note)
         {
-            if (player.isMounted || !IsInvisible(player) || !HasPerm(player.UserIDString, PermTeleport))
+            if (player.isMounted || !IsInvisible(player) || !HasPerm(player.UserIDString, PermTeleport) || !player.serverInput.IsDown(BUTTON.RELOAD))
                 return;
+
+            player.serverInput.Clear();
 
             UnityEngine.Vector3 newpos = new UnityEngine.Vector3(note.worldPosition.x, player.transform.position.y, note.worldPosition.z);
             player.Teleport(newpos);
-
-            for (int i = 0; i < player.State.pointsOfInterest.Count; i++)
-            {
-                MapNote state = player.State.pointsOfInterest[i];
-                if (state != null && state.associatedId.Value == note.associatedId.Value)
-                {
-                    state.Dispose();
-                    player.State.pointsOfInterest.RemoveAt(i);
-                    player.DirtyPlayerState();
-                    player.SendMarkersToClient();
-                    player.TeamUpdate();
-                    return;
-                }
-            }
+            note.Dispose();
+            player.State.pointsOfInterest.RemoveAt(player.State.pointsOfInterest.Count - 1);
+            player.DirtyPlayerState();
+            player.SendMarkersToClient();
+            player.TeamUpdate();
         }
 
         #endregion Hooks
@@ -1032,7 +1040,7 @@ namespace Oxide.Plugins
             {
                 foreach (var vanishPlayer in _hiddenPlayers)
                 {
-                    if (vanishPlayer == null || __result.Contains(vanishPlayer.Connection) || (position - vanishPlayer.transform.position).sqrMagnitude > distance) continue;
+                    if (vanishPlayer == null || __result.Contains(vanishPlayer.Connection) || (position - vanishPlayer.transform.position).magnitude > distance) continue;
                     __result.Add(vanishPlayer.Connection);
                 }
             }
@@ -1073,6 +1081,35 @@ namespace Oxide.Plugins
                     {
                         return false;
                     }
+                }
+                return true;
+            }
+        }
+
+        //ownership stuff
+        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(Translate.Phrase)), AutoPatch]
+        private static class Item_SetItemOwnership_phrase_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Item __instance, BasePlayer player, Translate.Phrase reason)
+            {
+                if (player._limitedNetworking)
+                {
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        [HarmonyPatch(typeof(Item), "SetItemOwnership", typeof(BasePlayer), typeof(string)), AutoPatch]
+        private static class Item_SetItemOwnership_string_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Item __instance, BasePlayer player, string reason)
+            {
+                if (player._limitedNetworking)
+                {
+                    return false;
                 }
                 return true;
             }
