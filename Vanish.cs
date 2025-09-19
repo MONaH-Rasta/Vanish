@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.2")]
+    [Info("Vanish", "Whispers88", "2.0.3")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -397,7 +397,7 @@ namespace Oxide.Plugins
             }
 
             //allows you to keybind vanish command with true/false args to force vanish or reappear
-            if (args.Length > 0 && bool.TryParse(args[0], out bool wantsVanish))
+            if (args.Length > 0 && args[0] != "True" && bool.TryParse(args[0], out bool wantsVanish))
             {
                 if (wantsVanish && !IsInvisible(player))
                 {
