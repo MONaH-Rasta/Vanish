@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.3")]
+    [Info("Vanish", "Whispers88", "2.0.4")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -1109,6 +1109,23 @@ namespace Oxide.Plugins
             {
                 if (player._limitedNetworking)
                 {
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        //for shotgun traps
+        [HarmonyPatch(typeof(BasePlayer), "Teleport", typeof(Vector3)), AutoPatch]
+        private static class BasePlayer_Teleport_Patch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(BasePlayer __instance, Vector3 position)
+            {
+                if (__instance._limitedNetworking)
+                {
+                    __instance.MovePosition(position, false);
+                    __instance.ClientRPC(RpcTarget.Player("ForcePositionTo", __instance), position);
                     return false;
                 }
                 return true;
