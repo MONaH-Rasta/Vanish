@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.4")]
+    [Info("Vanish", "Whispers88", "2.0.5")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -1032,11 +1032,11 @@ namespace Oxide.Plugins
 
         #region Harmony
         //Used for voices/sounds
-        [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool), typeof(bool)), AutoPatch]
+        [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool), typeof(bool), typeof(bool)), AutoPatch]
         private static class BaseNetworkable_GetConnectionsWithin_Patch
         {
             [HarmonyPostfix]
-            private static void Postfix(BaseNetworkable __instance, ref List<Connection> __result, Vector3 position, float distance, bool addSecondaryConnections = false, bool useRcEntityPosition = true)
+            private static void Postfix(BaseNetworkable __instance, ref List<Connection> __result, Vector3 position, float distance, bool addSecondaryConnections, bool useRcEntityPosition, bool includeInvisPlayers)
             {
                 foreach (var vanishPlayer in _hiddenPlayers)
                 {
