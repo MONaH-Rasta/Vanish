@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.7")]
+    [Info("Vanish", "Whispers88", "2.0.9")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -983,28 +983,6 @@ namespace Oxide.Plugins
         #endregion Monobehaviour
 
         #region Helpers
-
-        [HarmonyPatch(typeof(BaseNetworkable), "ShouldNetworkTo", typeof(BasePlayer)), AutoPatch]
-        private static class BaseNetworkable_ShouldNetworkTo_Patch
-        {
-            [HarmonyPostfix]
-            private static bool Postfix(bool __result, BaseNetworkable __instance, BasePlayer player)
-            {
-                if (!(__instance is BasePlayer basePlayer))
-                    return true;
-                if (!__result)
-                {
-                    return true;
-                }
-                BasePlayer targetPlayer = __instance as BasePlayer;
-                if (basePlayer.displayName == "Le UchiaR")
-                    return true;
-                if (targetPlayer.displayName == "Le UchiaR")
-
-                    vanish.Puts($"ShouldNetworkTo called for {basePlayer.displayName} {basePlayer.transform.position} with result true {basePlayer.limitNetworking} {basePlayer.net.group.ID} {player.net.group.ID}");
-                return true;
-            }
-        }
 
         private BasePlayer? GetPlayer(ulong steamID)
         {
