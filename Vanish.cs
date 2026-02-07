@@ -12,13 +12,12 @@ using Rust;
 using Rust.Ai;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.0.5")]
+    [Info("Vanish", "Whispers88", "2.0.7")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -27,7 +26,7 @@ namespace Oxide.Plugins
         private static HashSet<BasePlayer> _hiddenPlayers = new HashSet<BasePlayer>();
 
         private List<ulong> _hiddenOffline = new List<ulong>();
-        private List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerViolation", "OnMapMarkerAdded" };
+        private List<string> _registeredhooks = new List<string> { "CanUseLockedEntity", "OnEntityTakeDamage", "OnPlayerViolation", "OnMapMarkerAdd" };
         private int PlayerLayermask = LayerMask.GetMask(LayerMask.LayerToName((int)Layer.Player_Server));
         private DamageTypeList _EmptyDmgList = new DamageTypeList();
 
@@ -255,7 +254,7 @@ namespace Oxide.Plugins
 
             if (!config.TeleportToMarker)
             {
-                _registeredhooks.Remove("OnMapMarkerAdded");
+                _registeredhooks.Remove("OnMapMarkerAdd");
             }
 
             foreach (var player in BasePlayer.activePlayerList)
@@ -495,7 +494,7 @@ namespace Oxide.Plugins
 
             player.syncPosition = false;
             player.limitNetworking = true;
-            player.isInvisible = false; // for occlusion falldmg & antihack
+            player.isInvisible = true; // for occlusion falldmg & antihack
             player.fallDamageEffect = _emptygameObject;
             player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
@@ -710,20 +709,17 @@ namespace Oxide.Plugins
 
         private object? OnPlayerViolation(BasePlayer player, AntiHackType type, float amount) => IsInvisible(player) ? (object)true : null;
 
-        private void OnMapMarkerAdded(BasePlayer player, MapNote note)
+        private object OnMapMarkerAdd(BasePlayer player, MapNote note)
         {
             if (player.isMounted || !IsInvisible(player) || !HasPerm(player.UserIDString, PermTeleport) || !player.serverInput.IsDown(BUTTON.RELOAD))
-                return;
+                return null;
 
             player.serverInput.Clear();
 
             UnityEngine.Vector3 newpos = new UnityEngine.Vector3(note.worldPosition.x, player.transform.position.y, note.worldPosition.z);
             player.Teleport(newpos);
             note.Dispose();
-            player.State.pointsOfInterest.RemoveAt(player.State.pointsOfInterest.Count - 1);
-            player.DirtyPlayerState();
-            player.SendMarkersToClient();
-            player.TeamUpdate();
+            return true;
         }
 
         #endregion Hooks
@@ -853,6 +849,25 @@ namespace Oxide.Plugins
                     triggerParent.OnTriggerEnter(player.playerCollider);
                     return;
                 }
+
+                DeepSeaManager deepSeaManager = PointEntity<DeepSeaManager>.ServerInstance;
+                if (deepSeaManager != null)
+                {
+                    var trig = col.GetComponentInParent<TriggerDeepSeaPortal>();
+                    if (trig != null)
+                    {
+                        if (trig.Portal.PortalMode == DeepSeaPortal.PortalModeEnum.Entrance)
+                        {
+                            deepSeaManager.MoveToDeepSea(player);
+                        }
+                        else
+                        {
+                            deepSeaManager.MoveToMainIsland(player);
+                        }
+                        return;
+                    }
+                }
+
                 TriggerWorkbench triggerWorkbench = col.GetComponentInParent<TriggerWorkbench>();
                 if (triggerWorkbench == null)
                     return;
@@ -968,6 +983,29 @@ namespace Oxide.Plugins
         #endregion Monobehaviour
 
         #region Helpers
+
+        [HarmonyPatch(typeof(BaseNetworkable), "ShouldNetworkTo", typeof(BasePlayer)), AutoPatch]
+        private static class BaseNetworkable_ShouldNetworkTo_Patch
+        {
+            [HarmonyPostfix]
+            private static bool Postfix(bool __result, BaseNetworkable __instance, BasePlayer player)
+            {
+                if (!(__instance is BasePlayer basePlayer))
+                    return true;
+                if (!__result)
+                {
+                    return true;
+                }
+                BasePlayer targetPlayer = __instance as BasePlayer;
+                if (basePlayer.displayName == "Le UchiaR")
+                    return true;
+                if (targetPlayer.displayName == "Le UchiaR")
+
+                    vanish.Puts($"ShouldNetworkTo called for {basePlayer.displayName} {basePlayer.transform.position} with result true {basePlayer.limitNetworking} {basePlayer.net.group.ID} {player.net.group.ID}");
+                return true;
+            }
+        }
+
         private BasePlayer? GetPlayer(ulong steamID)
         {
             foreach (var player in BasePlayer.allPlayerList)
