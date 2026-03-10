@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.0")]
+    [Info("Vanish", "Whispers88", "2.1.1")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -459,6 +459,8 @@ namespace Oxide.Plugins
 
             player._limitedNetworking = false;
             player.isInvisible = false; // for occlusion falldmg & antihack
+            BasePlayer.invisPlayers.Clear(); //im sure this will break at some point but for now its the fix for double voices
+
             _hiddenPlayers.Remove(player);
 
             player.EnablePlayerCollider();
@@ -521,6 +523,7 @@ namespace Oxide.Plugins
             player.syncPosition = false;
             player.limitNetworking = true;
             player.isInvisible = true; // for occlusion falldmg & antihack
+            BasePlayer.invisPlayers.Clear(); //im sure this will break at some point but for now its the fix for double voices
             player.fallDamageEffect = _emptygameObject;
             player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
@@ -1097,8 +1100,21 @@ namespace Oxide.Plugins
                     if (playerTransform == null)
                         continue;
 
-                    if((position - playerTransform.position).sqrMagnitude > distance) continue;
-                    __result.Add(vanishPlayer.Connection);
+                    if ((position - playerTransform.position).sqrMagnitude > distance) continue;
+
+                    bool alreadyAdded = false;
+                    for (int i = __result.Count - 1; i >= 0; i--)
+                    {
+                        if (__result[i].userid == vanishPlayer.userID)
+                        {
+                            alreadyAdded = true;
+                            __result.RemoveAt(i);
+                            break;
+                        }
+                    }
+
+                    if (!alreadyAdded)
+                        __result.Add(vanishPlayer.Connection);
                 }
             }
         }
@@ -1112,9 +1128,9 @@ namespace Oxide.Plugins
                 if (sourceConnection == null)
                     return true;
 
-                if(_hiddenPlayers.IsHidden(sourceConnection.userid))
+                if (_hiddenPlayers.IsHidden(sourceConnection.userid))
                     return false;
-               
+
                 return true;
             }
         }
