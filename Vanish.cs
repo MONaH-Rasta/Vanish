@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.1")]
+    [Info("Vanish", "Whispers88", "2.1.2")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -445,7 +445,7 @@ namespace Oxide.Plugins
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
 
-            if (config.AntiHack) player.ResetAntiHack();
+            if (config.AntiHack) player.ResetAntiHack(player.StableIndex, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
 
             player.syncPosition = true;
 
@@ -873,7 +873,7 @@ namespace Oxide.Plugins
                 if (player == null)
                     return;
 
-                player.net.UpdateGroups(player.transform.position);
+                player.net.UpdateGroups(player.transform.position, player.networkRange);
             }
 
             void OnTriggerEnter(Collider col)
@@ -1100,7 +1100,7 @@ namespace Oxide.Plugins
                     if (playerTransform == null)
                         continue;
 
-                    if ((position - playerTransform.position).sqrMagnitude > distance) continue;
+                    if ((position - playerTransform.position).sqrMagnitude > distanceSqr) continue;
 
                     bool alreadyAdded = false;
                     for (int i = __result.Count - 1; i >= 0; i--)
@@ -1135,11 +1135,11 @@ namespace Oxide.Plugins
             }
         }
 
-        [HarmonyPatch(typeof(EffectNetwork), "Send", typeof(Effect)), AutoPatch]
+        [HarmonyPatch(typeof(EffectNetwork), "Send", typeof(Effect), typeof(EntityNetworkRange)), AutoPatch]
         private static class EffectNetwork_Send_Patch
         {
             [HarmonyPrefix]
-            private static bool Prefix(Effect effect)
+            private static bool Prefix(Effect effect, EntityNetworkRange networkRange)
             {
                 if (effect == null || effect.source == 0)
                     return true;
