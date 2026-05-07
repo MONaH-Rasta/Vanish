@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.2")]
+    [Info("Vanish", "Whispers88", "2.1.3")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -445,7 +445,10 @@ namespace Oxide.Plugins
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
 
-            if (config.AntiHack) player.ResetAntiHack(player.StableIndex, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
+            int activePlayerInd = player.ActivePlayerInd;
+            int indexForSyncRemove = BasePlayer.PlayerCache.GetIndexForSyncRemove(activePlayerInd);
+
+            if (config.AntiHack) player.ResetAntiHack(BasePlayer.PlayerCache.Count, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
 
             player.syncPosition = true;
 
@@ -544,7 +547,7 @@ namespace Oxide.Plugins
             player.OnNetworkSubscribersLeave(connections);
             Pool.FreeUnmanaged(ref connections);
 
-            if ((!ServerOcclusion.OcclusionEnabled ? false : BasePlayer.UseOcclusionV2))
+            if (ServerOcclusion.OcclusionEnabled)
             {
                 player.OcclusionMakeSubscribersForget();
             }
@@ -607,7 +610,7 @@ namespace Oxide.Plugins
             player.metabolism.calories.min = player.metabolism.calories.value;
 
             player.SetHealth(player.MaxHealth());
-            player.metabolism.SendChangesToClient();
+            player.metabolism.SendChanges();
             player.metabolism.timeSinceLastMetabolism = 0f;
 
         }
