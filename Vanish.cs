@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.3")]
+    [Info("Vanish", "Whispers88", "2.1.4")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -403,7 +403,7 @@ namespace Oxide.Plugins
             player.inventory.loot.PositionChecks = false;
             player.inventory.loot.MarkDirty();
             player.inventory.loot.SendImmediate();
-            player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
+            player.ClientRPC(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
         }
 
         private void VanishCommand(IPlayer iplayer, string command, string[] args)
@@ -445,10 +445,8 @@ namespace Oxide.Plugins
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
 
-            int activePlayerInd = player.ActivePlayerInd;
-            int indexForSyncRemove = BasePlayer.PlayerCache.GetIndexForSyncRemove(activePlayerInd);
 
-            if (config.AntiHack) player.ResetAntiHack(BasePlayer.PlayerCache.Count, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
+            if (config.AntiHack) player.ResetAntiHack(player.ActivePlayerInd, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
 
             player.syncPosition = true;
 
@@ -831,7 +829,7 @@ namespace Oxide.Plugins
                     player.inventory.loot.PositionChecks = false;
                     player.inventory.loot.MarkDirty();
                     player.SendNetworkUpdateImmediate();
-                    player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "generic_resizable");
+                    player.ClientRPC(RpcTarget.Player("RPC_OpenLootPanel", player), "generic_resizable");
                     return;
                 }
 
@@ -847,7 +845,7 @@ namespace Oxide.Plugins
                     player.inventory.loot.PositionChecks = false;
                     player.inventory.loot.MarkDirty();
                     player.inventory.loot.SendImmediate();
-                    player.ClientRPC<string>(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
+                    player.ClientRPC(RpcTarget.Player("RPC_OpenLootPanel", player), "player_corpse");
                     return;
                 }
 
@@ -1087,11 +1085,11 @@ namespace Oxide.Plugins
         #region Harmony
 
         //Used for voices/sounds
-        [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool), typeof(bool), typeof(bool)), AutoPatch]
+        [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool)), AutoPatch]
         private static class BaseNetworkable_GetConnectionsWithin_Patch
         {
             [HarmonyPostfix]
-            private static void Postfix(BaseNetworkable __instance, ref List<Connection> __result, Vector3 position, float distance, bool addSecondaryConnections, bool useRcEntityPosition, bool includeInvisPlayers)
+            private static void Postfix(ref List<Connection> __result, Vector3 position, float distance)
             {
                 float distanceSqr = distance * distance;
                 foreach (var vanishPlayer in _hiddenPlayers._vanishedPlayers)
