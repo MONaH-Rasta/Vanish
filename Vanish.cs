@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.4")]
+    [Info("Vanish", "Whispers88", "2.1.5")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -446,7 +446,7 @@ namespace Oxide.Plugins
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
 
 
-            if (config.AntiHack) player.ResetAntiHack(player.ActivePlayerInd, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
+            if (config.AntiHack) BasePlayer.ResetAntiHack(player, AntiHack.PlayerStates, AntiHack.PlayerNoclipStates, AntiHack.PlayerSpeedhackStates, AntiHack.PlayerFlyhackStates);
 
             player.syncPosition = true;
 
@@ -969,7 +969,7 @@ namespace Oxide.Plugins
                 child.layer = LayerReserved1;
                 child.transform.localScale = Vector3.zero;
                 col.isTrigger = true;
-                player.lastAdminCheatTime = float.MaxValue;
+
                 InvokeRepeating("UpdatePos", 1f, 5f);
             }
 
@@ -982,7 +982,6 @@ namespace Oxide.Plugins
                     if (player.IsConnected)
                         player.Connection.active = true;
 
-                    player.lastAdminCheatTime = Time.realtimeSinceStartup;
                     player.transform.localScale = new Vector3(1, 1, 1);
 
                     //Reset Triggers
