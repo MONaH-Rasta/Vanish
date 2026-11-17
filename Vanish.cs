@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Vanish", "Whispers88", "2.1.5")]
+    [Info("Vanish", "Whispers88", "2.1.6")]
     [Description("Allows players with permission to become invisible")]
     public class Vanish : CovalencePlugin
     {
@@ -439,8 +439,6 @@ namespace Oxide.Plugins
             else Disappear(player);
         }
 
-        private string drowneffect = "28ad47c8e6d313742a7a2740674a25b5";
-        private string falldamageeffect = "ca14ed027d5924003b1c5d9e523a5fce";
         private void Reappear(BasePlayer player)
         {
             if (Interface.CallHook("OnVanishReappear", player) != null) return;
@@ -460,7 +458,8 @@ namespace Oxide.Plugins
 
             player._limitedNetworking = false;
             player.isInvisible = false; // for occlusion falldmg & antihack
-            BasePlayer.invisPlayers.Clear(); //im sure this will break at some point but for now its the fix for double voices
+            BasePlayer.invisPlayers.Remove(player);
+            player.SendVoiceMutedByInvisibility();
 
             _hiddenPlayers.Remove(player);
 
@@ -468,10 +467,6 @@ namespace Oxide.Plugins
             player.UpdateNetworkGroup();
             player.SendNetworkUpdate();
             player.GetHeldEntity()?.SendNetworkUpdate();
-
-            //Un-Mute Player Effects
-            player.drownEffect.guid = drowneffect;
-            player.fallDamageEffect.guid = falldamageeffect;
 
             if (config.Metabolism)
             {
@@ -504,7 +499,6 @@ namespace Oxide.Plugins
             if (config.EnableNotifications) Message(player.IPlayer, "Reappear");
         }
 
-        private GameObjectRef _emptygameObject = new GameObjectRef();
         private const string noclip = "noclip";
 
         private void Disappear(BasePlayer player)
@@ -523,10 +517,6 @@ namespace Oxide.Plugins
 
             player.syncPosition = false;
             player.limitNetworking = true;
-            player.isInvisible = true; // for occlusion falldmg & antihack
-            BasePlayer.invisPlayers.Clear(); //im sure this will break at some point but for now its the fix for double voices
-            player.fallDamageEffect = _emptygameObject;
-            player.drownEffect = _emptygameObject;
             player.GetHeldEntity()?.SetHeld(false);
             player.DisablePlayerCollider();
 
@@ -549,6 +539,10 @@ namespace Oxide.Plugins
             {
                 player.OcclusionMakeSubscribersForget();
             }
+
+            player.isInvisible = true; 
+            BasePlayer.invisPlayers.Add(player);
+            player.SendVoiceMutedByInvisibility();
 
             VanishPositionUpdate vanishPositionUpdate;
             if (player.TryGetComponent<VanishPositionUpdate>(out vanishPositionUpdate))
@@ -1083,13 +1077,13 @@ namespace Oxide.Plugins
 
         #region Harmony
 
-        //Used for voices/sounds
         [HarmonyPatch(typeof(BaseNetworkable), "GetConnectionsWithin", typeof(Vector3), typeof(float), typeof(bool)), AutoPatch]
         private static class BaseNetworkable_GetConnectionsWithin_Patch
         {
             [HarmonyPostfix]
-            private static void Postfix(ref List<Connection> __result, Vector3 position, float distance)
+            private static void Postfix(ref List<Connection> __result, Vector3 position, float distance, bool includeInvisPlayers)
             {
+                if (includeInvisPlayers) return;
                 float distanceSqr = distance * distance;
                 foreach (var vanishPlayer in _hiddenPlayers._vanishedPlayers)
                 {
